@@ -78,10 +78,8 @@ include:
     inputs:
       stage: publish
       node_version: $NODE_VERSION
-      registry: 'both'
       package_scope: '@geode'
       access: 'public'
-      when: 'manual'
 
 # =============================================================================
 # Job Overrides and Customizations
