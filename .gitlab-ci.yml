@@ -1,19 +1,101 @@
-# You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/ee/user/application_security/sast/#customizing-the-sast-settings
-# Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure
-# Dependency Scanning customization: https://docs.gitlab.com/ee/user/application_security/dependency_scanning/#customizing-the-dependency-scanning-settings
-# Container Scanning customization: https://docs.gitlab.com/ee/user/application_security/container_scanning/#customizing-the-container-scanning-settings
-# Note that environment variables can be set in several places
-# See https://docs.gitlab.com/ee/ci/variables/#cicd-variable-precedence
+# Geode Node.js Client CI/CD Pipeline
+# Uses DevNW CI/CD Catalog for standardized components
+# https://gitlab.com/devnw/ci-catalog
+
 stages:
-- test
-- secret-detection
-sast:
-  stage: test
-include:
-- template: Security/SAST.gitlab-ci.yml
-- template: Security/Secret-Detection.gitlab-ci.yml
+  - install
+  - lint
+  - build
+  - test
+  - security
+  - publish
+
 variables:
-  SECRET_DETECTION_ENABLED: 'true'
-secret_detection:
-  stage: secret-detection
+  NODE_VERSION: '20'
+
+# =============================================================================
+# Include DevNW CI/CD Catalog Components
+# =============================================================================
+
+include:
+  # Node.js components
+  - component: gitlab.com/devnw/ci-catalog/node-install@~latest
+    inputs:
+      stage: install
+      node_version: $NODE_VERSION
+
+  - component: gitlab.com/devnw/ci-catalog/node-lint@~latest
+    inputs:
+      stage: lint
+      node_version: $NODE_VERSION
+      lint_script: 'lint'
+      allow_failure: false
+
+  - component: gitlab.com/devnw/ci-catalog/node-format@~latest
+    inputs:
+      stage: lint
+      node_version: $NODE_VERSION
+      format_script: 'format:check'
+      allow_failure: false
+
+  - component: gitlab.com/devnw/ci-catalog/node-typecheck@~latest
+    inputs:
+      stage: lint
+      node_version: $NODE_VERSION
+      typecheck_script: 'typecheck'
+      allow_failure: false
+
+  - component: gitlab.com/devnw/ci-catalog/node-build@~latest
+    inputs:
+      stage: build
+      node_version: $NODE_VERSION
+      build_script: 'build'
+      output_dir: 'dist'
+
+  - component: gitlab.com/devnw/ci-catalog/node-test@~latest
+    inputs:
+      stage: test
+      node_version: $NODE_VERSION
+      test_script: 'test:coverage'
+      coverage_report: true
+      coverage_path: 'coverage/cobertura-coverage.xml'
+
+  # Security scanning
+  - component: gitlab.com/devnw/ci-catalog/security-sast@~latest
+    inputs:
+      stage: security
+
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@~latest
+    inputs:
+      stage: security
+
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@~latest
+    inputs:
+      stage: security
+
+  # Publishing (only on tags)
+  - component: gitlab.com/devnw/ci-catalog/node-publish@~latest
+    inputs:
+      stage: publish
+      node_version: $NODE_VERSION
+      registry: 'both'
+      package_scope: '@geode'
+      access: 'public'
+      when: 'manual'
+
+# =============================================================================
+# Job Overrides and Customizations
+# =============================================================================
+
+# Override publish rules to only trigger on version tags
+node-publish-npm:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      when: manual
+    - when: never
+
+node-publish-gitlab:
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      when: on_success
+    - when: never

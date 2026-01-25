@@ -1,0 +1,397 @@
+import { describe, it, expect } from 'vitest';
+import {
+  GQLValue,
+  parseGQLType,
+  fromJSON,
+  parseRow,
+  rowToObject,
+  type GQLValueKind,
+} from '../../src/types.js';
+
+describe('types', () => {
+  describe('GQLValue', () => {
+    describe('factory methods', () => {
+      it('should create null value', () => {
+        const v = GQLValue.null();
+        expect(v.kind).toBe('NULL');
+        expect(v.isNull).toBe(true);
+        expect(v.toJS()).toBeNull();
+      });
+
+      it('should create boolean values', () => {
+        const t = GQLValue.bool(true);
+        const f = GQLValue.bool(false);
+
+        expect(t.kind).toBe('BOOL');
+        expect(t.asBool).toBe(true);
+        expect(f.asBool).toBe(false);
+      });
+
+      it('should create integer values', () => {
+        const v1 = GQLValue.int(42);
+        // Note: Use BigInt with string literal to preserve precision beyond MAX_SAFE_INTEGER
+        const v2 = GQLValue.int(BigInt('9007199254740993'));
+
+        expect(v1.kind).toBe('INT');
+        expect(v1.asInt).toBe(42n);
+        expect(v1.asNumber).toBe(42);
+        expect(v2.asInt).toBe(BigInt('9007199254740993'));
+      });
+
+      it('should create float values', () => {
+        const v = GQLValue.float(3.14);
+
+        expect(v.kind).toBe('FLOAT');
+        expect(v.asFloat).toBe(3.14);
+        expect(v.asNumber).toBe(3.14);
+      });
+
+      it('should create string values', () => {
+        const v = GQLValue.string('hello');
+
+        expect(v.kind).toBe('STRING');
+        expect(v.asString).toBe('hello');
+      });
+
+      it('should create decimal values', () => {
+        const v = GQLValue.decimal('123.456');
+
+        expect(v.kind).toBe('DECIMAL');
+        expect(v.asDecimal.toString()).toBe('123.456');
+        expect(v.asNumber).toBe(123.456);
+      });
+
+      it('should create array values', () => {
+        const v = GQLValue.array([GQLValue.int(1), GQLValue.int(2), GQLValue.int(3)]);
+
+        expect(v.kind).toBe('ARRAY');
+        expect(v.asArray).toHaveLength(3);
+        expect(v.asArray[0]?.asNumber).toBe(1);
+      });
+
+      it('should create object values', () => {
+        const v = GQLValue.object({
+          name: GQLValue.string('Alice'),
+          age: GQLValue.int(30),
+        });
+
+        expect(v.kind).toBe('OBJECT');
+        expect(v.asObject.get('name')?.asString).toBe('Alice');
+        expect(v.asObject.get('age')?.asNumber).toBe(30);
+      });
+
+      it('should create bytes values', () => {
+        const v = GQLValue.bytes(new Uint8Array([1, 2, 3]));
+
+        expect(v.kind).toBe('BYTEA');
+        expect(v.asBytes).toEqual(new Uint8Array([1, 2, 3]));
+      });
+
+      it('should create date values', () => {
+        const date = new Date('2024-01-15');
+        const v = GQLValue.date(date);
+
+        expect(v.kind).toBe('DATE');
+        expect(v.asDate).toEqual(date);
+      });
+
+      it('should create timestamp values', () => {
+        const date = new Date('2024-01-15T10:30:00Z');
+        const v = GQLValue.timestamp(date);
+
+        expect(v.kind).toBe('TIMESTAMP');
+        expect(v.asDate).toEqual(date);
+      });
+
+      it('should create UUID values', () => {
+        const v = GQLValue.uuid('550e8400-e29b-41d4-a716-446655440000');
+
+        expect(v.kind).toBe('UUID');
+        expect(v.asString).toBe('550e8400-e29b-41d4-a716-446655440000');
+      });
+
+      it('should create JSON values', () => {
+        const data = { foo: 'bar', count: 42 };
+        const v = GQLValue.json(data);
+
+        expect(v.kind).toBe('JSON');
+        expect(v.asJSON).toEqual(data);
+      });
+
+      it('should create node values', () => {
+        const node = {
+          id: '123',
+          labels: ['Person'],
+          properties: { name: 'Alice' },
+        };
+        const v = GQLValue.node(node);
+
+        expect(v.kind).toBe('NODE');
+        expect(v.asNode).toEqual(node);
+      });
+
+      it('should create edge values', () => {
+        const edge = {
+          id: '456',
+          type: 'KNOWS',
+          startNode: '123',
+          endNode: '789',
+          properties: { since: 2020 },
+        };
+        const v = GQLValue.edge(edge);
+
+        expect(v.kind).toBe('EDGE');
+        expect(v.asEdge).toEqual(edge);
+      });
+
+      it('should create path values', () => {
+        const path = {
+          nodes: [{ id: '1', labels: ['A'], properties: {} }],
+          edges: [],
+        };
+        const v = GQLValue.path(path);
+
+        expect(v.kind).toBe('PATH');
+        expect(v.asPath).toEqual(path);
+      });
+
+      it('should create range values', () => {
+        const range = {
+          lower: 1,
+          upper: 10,
+          lowerInclusive: true,
+          upperInclusive: false,
+        };
+        const v = GQLValue.range(range);
+
+        expect(v.kind).toBe('RANGE');
+        expect(v.asRange).toEqual(range);
+      });
+    });
+
+    describe('type accessors', () => {
+      it('should throw on type mismatch', () => {
+        const v = GQLValue.string('test');
+
+        expect(() => v.asBool).toThrow(TypeError);
+        expect(() => v.asInt).toThrow(TypeError);
+        expect(() => v.asFloat).toThrow(TypeError);
+        expect(() => v.asDecimal).toThrow(TypeError);
+        expect(() => v.asArray).toThrow(TypeError);
+        expect(() => v.asBytes).toThrow(TypeError);
+        expect(() => v.asDate).toThrow(TypeError);
+        expect(() => v.asNode).toThrow(TypeError);
+        expect(() => v.asEdge).toThrow(TypeError);
+        expect(() => v.asPath).toThrow(TypeError);
+        expect(() => v.asRange).toThrow(TypeError);
+        expect(() => v.asJSON).toThrow(TypeError);
+      });
+    });
+
+    describe('toString', () => {
+      it('should convert all types to string', () => {
+        expect(GQLValue.null().toString()).toBe('null');
+        expect(GQLValue.bool(true).toString()).toBe('true');
+        expect(GQLValue.int(42).toString()).toBe('42');
+        expect(GQLValue.float(3.14).toString()).toBe('3.14');
+        expect(GQLValue.string('hello').toString()).toBe('hello');
+        expect(GQLValue.decimal('123.456').toString()).toBe('123.456');
+        expect(GQLValue.array([GQLValue.int(1), GQLValue.int(2)]).toString()).toBe('[1, 2]');
+        expect(GQLValue.uuid('550e8400-e29b-41d4-a716-446655440000').toString()).toBe(
+          '550e8400-e29b-41d4-a716-446655440000'
+        );
+      });
+    });
+
+    describe('toJS', () => {
+      it('should convert to JS values', () => {
+        expect(GQLValue.null().toJS()).toBeNull();
+        expect(GQLValue.bool(true).toJS()).toBe(true);
+        expect(GQLValue.int(42).toJS()).toBe(42);
+        expect(GQLValue.float(3.14).toJS()).toBe(3.14);
+        expect(GQLValue.string('hello').toJS()).toBe('hello');
+      });
+
+      it('should return bigint for large integers', () => {
+        const large = GQLValue.int(BigInt(Number.MAX_SAFE_INTEGER) + 1n);
+        expect(typeof large.toJS()).toBe('bigint');
+      });
+
+      it('should convert arrays recursively', () => {
+        const arr = GQLValue.array([GQLValue.int(1), GQLValue.string('two')]);
+        expect(arr.toJS()).toEqual([1, 'two']);
+      });
+
+      it('should convert objects recursively', () => {
+        const obj = GQLValue.object({
+          a: GQLValue.int(1),
+          b: GQLValue.string('two'),
+        });
+        expect(obj.toJS()).toEqual({ a: 1, b: 'two' });
+      });
+    });
+  });
+
+  describe('parseGQLType', () => {
+    const testCases: Array<[string, GQLValueKind]> = [
+      ['INT', 'INT'],
+      ['INTEGER', 'INT'],
+      ['BIGINT', 'INT'],
+      ['FLOAT', 'FLOAT'],
+      ['DOUBLE', 'FLOAT'],
+      ['REAL', 'FLOAT'],
+      ['DECIMAL', 'DECIMAL'],
+      ['NUMERIC', 'DECIMAL'],
+      ['STRING', 'STRING'],
+      ['VARCHAR', 'STRING'],
+      ['TEXT', 'STRING'],
+      ['BOOL', 'BOOL'],
+      ['BOOLEAN', 'BOOL'],
+      ['NULL', 'NULL'],
+      ['LIST', 'ARRAY'],
+      ['ARRAY', 'ARRAY'],
+      ['MAP', 'OBJECT'],
+      ['RECORD', 'OBJECT'],
+      ['OBJECT', 'OBJECT'],
+      ['NODE', 'NODE'],
+      ['EDGE', 'EDGE'],
+      ['RELATIONSHIP', 'EDGE'],
+      ['PATH', 'PATH'],
+      ['BYTEA', 'BYTEA'],
+      ['BINARY', 'BYTEA'],
+      ['DATE', 'DATE'],
+      ['TIME', 'TIME'],
+      ['TIMETZ', 'TIMETZ'],
+      ['TIMESTAMP', 'TIMESTAMP'],
+      ['TIMESTAMPTZ', 'TIMESTAMPTZ'],
+      ['INTERVAL', 'INTERVAL'],
+      ['JSON', 'JSON'],
+      ['JSONB', 'JSONB'],
+      ['XML', 'XML'],
+      ['UUID', 'UUID'],
+      ['URL', 'URL'],
+      ['DOMAIN', 'DOMAIN'],
+      ['ENUM', 'ENUM'],
+      ['BIT', 'BIT_STRING'],
+      ['VARBIT', 'BIT_STRING'],
+      ['INT_RANGE', 'RANGE'],
+      ['UNKNOWN_TYPE', 'UNKNOWN'],
+    ];
+
+    it.each(testCases)('should parse %s as %s', (input, expected) => {
+      expect(parseGQLType(input)).toBe(expected);
+    });
+
+    it('should be case-insensitive', () => {
+      expect(parseGQLType('int')).toBe('INT');
+      expect(parseGQLType('String')).toBe('STRING');
+      expect(parseGQLType('BOOL')).toBe('BOOL');
+    });
+  });
+
+  describe('fromJSON', () => {
+    it('should convert null', () => {
+      expect(fromJSON(null).kind).toBe('NULL');
+      expect(fromJSON(undefined).kind).toBe('NULL');
+    });
+
+    it('should convert boolean', () => {
+      expect(fromJSON(true).asBool).toBe(true);
+      expect(fromJSON(false).asBool).toBe(false);
+    });
+
+    it('should convert integers', () => {
+      expect(fromJSON(42).asNumber).toBe(42);
+    });
+
+    it('should convert floats', () => {
+      expect(fromJSON(3.14).asNumber).toBe(3.14);
+    });
+
+    it('should convert bigint', () => {
+      expect(fromJSON(BigInt(9007199254740993)).kind).toBe('INT');
+    });
+
+    it('should convert strings', () => {
+      expect(fromJSON('hello').asString).toBe('hello');
+    });
+
+    it('should detect UUID strings', () => {
+      const v = fromJSON('550e8400-e29b-41d4-a716-446655440000');
+      expect(v.kind).toBe('UUID');
+    });
+
+    it('should detect ISO date strings', () => {
+      const v = fromJSON('2024-01-15T10:30:00Z');
+      expect(v.kind).toBe('TIMESTAMP');
+    });
+
+    it('should convert arrays', () => {
+      const v = fromJSON([1, 2, 3]);
+      expect(v.kind).toBe('ARRAY');
+      expect(v.asArray).toHaveLength(3);
+    });
+
+    it('should convert objects', () => {
+      const v = fromJSON({ a: 1, b: 'two' });
+      expect(v.kind).toBe('OBJECT');
+    });
+
+    it('should detect node objects', () => {
+      const v = fromJSON({ id: '1', labels: ['Person'], properties: {} });
+      expect(v.kind).toBe('NODE');
+    });
+
+    it('should detect edge objects', () => {
+      const v = fromJSON({
+        id: '1',
+        type: 'KNOWS',
+        startNode: '2',
+        endNode: '3',
+        properties: {},
+      });
+      expect(v.kind).toBe('EDGE');
+    });
+
+    it('should detect path objects', () => {
+      const v = fromJSON({ nodes: [], edges: [] });
+      expect(v.kind).toBe('PATH');
+    });
+
+    it('should use type hint when provided', () => {
+      const v = fromJSON('123', 'INT');
+      expect(v.kind).toBe('INT');
+      expect(v.asInt).toBe(123n);
+    });
+  });
+
+  describe('parseRow', () => {
+    it('should parse row with columns', () => {
+      const raw = { id: 42, name: 'Alice', active: true };
+      const columns = [
+        { name: 'id', type: 'INT' as const, kind: 'INT' as const },
+        { name: 'name', type: 'STRING' as const, kind: 'STRING' as const },
+        { name: 'active', type: 'BOOL' as const, kind: 'BOOL' as const },
+      ];
+
+      const row = parseRow(raw, columns);
+
+      expect(row.get('id')?.asNumber).toBe(42);
+      expect(row.get('name')?.asString).toBe('Alice');
+      expect(row.get('active')?.asBool).toBe(true);
+    });
+  });
+
+  describe('rowToObject', () => {
+    it('should convert row to plain object', () => {
+      const row = new Map<string, GQLValue>([
+        ['id', GQLValue.int(42)],
+        ['name', GQLValue.string('Alice')],
+      ]);
+
+      const obj = rowToObject(row);
+
+      expect(obj).toEqual({ id: 42, name: 'Alice' });
+    });
+  });
+});
