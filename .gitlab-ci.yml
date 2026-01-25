@@ -10,9 +10,6 @@ stages:
   - security
   - publish
 
-variables:
-  NODE_VERSION: '20'
-
 # =============================================================================
 # Include DevNW CI/CD Catalog Components
 # =============================================================================
@@ -22,40 +19,40 @@ include:
   - component: gitlab.com/devnw/ci-catalog/node-install@~latest
     inputs:
       stage: install
-      node_version: $NODE_VERSION
+      node_version: '20'
 
   - component: gitlab.com/devnw/ci-catalog/node-lint@~latest
     inputs:
       stage: lint
-      node_version: $NODE_VERSION
+      node_version: '20'
       lint_script: 'lint'
       allow_failure: false
 
   - component: gitlab.com/devnw/ci-catalog/node-format@~latest
     inputs:
       stage: lint
-      node_version: $NODE_VERSION
+      node_version: '20'
       format_script: 'format:check'
       allow_failure: false
 
   - component: gitlab.com/devnw/ci-catalog/node-typecheck@~latest
     inputs:
       stage: lint
-      node_version: $NODE_VERSION
+      node_version: '20'
       typecheck_script: 'typecheck'
       allow_failure: false
 
   - component: gitlab.com/devnw/ci-catalog/node-build@~latest
     inputs:
       stage: build
-      node_version: $NODE_VERSION
+      node_version: '20'
       build_script: 'build'
       output_dir: 'dist'
 
   - component: gitlab.com/devnw/ci-catalog/node-test@~latest
     inputs:
       stage: test
-      node_version: $NODE_VERSION
+      node_version: '20'
       test_script: 'test:coverage'
       coverage_report: true
       coverage_path: 'coverage/cobertura-coverage.xml'
@@ -77,7 +74,7 @@ include:
   - component: gitlab.com/devnw/ci-catalog/node-publish@~latest
     inputs:
       stage: publish
-      node_version: $NODE_VERSION
+      node_version: '20'
       package_scope: '@geode'
       access: 'public'
 
