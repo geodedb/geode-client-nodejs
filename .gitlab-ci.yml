@@ -85,7 +85,7 @@ include:
       access: 'public'
 
   # Release creation
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@~latest
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.9.3
     inputs:
       stage: release
 
