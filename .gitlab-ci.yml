@@ -77,7 +77,7 @@ include:
       stage: security
 
   # Publishing (only on tags)
-  - component: gitlab.com/devnw/ci-catalog/node-publish@v1.9.1
+  - component: gitlab.com/devnw/ci-catalog/node-publish@v1.9.2
     inputs:
       stage: publish
       node_version: '20'
