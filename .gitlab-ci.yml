@@ -2,6 +2,11 @@
 # Uses DevNW CI/CD Catalog for standardized components
 # https://gitlab.com/devnw/ci-catalog
 
+default:
+  tags:
+    - company
+    - linux
+
 stages:
   - install
   - lint
@@ -9,6 +14,7 @@ stages:
   - test
   - security
   - publish
+  - release
 
 # =============================================================================
 # Include DevNW CI/CD Catalog Components
@@ -77,6 +83,11 @@ include:
       node_version: '20'
       package_scope: '@geode'
       access: 'public'
+
+  # Release creation
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@~latest
+    inputs:
+      stage: release
 
 # =============================================================================
 # Job Overrides and Customizations
