@@ -88,13 +88,14 @@ include:
 
   # Publishing with OIDC trusted publishing (only on tags)
   # Requires trusted publisher configured on npmjs.com
-  - component: gitlab.com/devnw/ci-catalog/node-publish@v1.9.13
+  - component: gitlab.com/devnw/ci-catalog/node-publish@v1.9.14
     inputs:
       stage: publish
       node_version: '22'
       package_scope: '@geodedb'
       access: 'public'
       environment: 'npm-publish'
+      provenance: false  # Requires GitLab-hosted runners
 
   # Release creation
   - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.9.3
