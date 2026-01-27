@@ -117,3 +117,15 @@ node-publish-gitlab:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/
       when: on_success
     - when: never
+
+# Release must wait for publish to complete
+create-release:
+  needs:
+    - job: node-publish-npm
+      optional: false
+    - job: node-publish-gitlab
+      optional: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/
+      when: on_success
+    - when: never
