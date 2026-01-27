@@ -498,10 +498,22 @@ export function parseGQLType(typeStr: string): GQLValueKind {
     case 'INT':
     case 'INTEGER':
     case 'BIGINT':
+    case 'INT8':
+    case 'INT16':
+    case 'INT32':
+    case 'INT64':
+    case 'UINT8':
+    case 'UINT16':
+    case 'UINT32':
+    case 'UINT64':
+    case 'SMALLINT':
+    case 'TINYINT':
       return 'INT';
     case 'FLOAT':
     case 'DOUBLE':
     case 'REAL':
+    case 'FLOAT32':
+    case 'FLOAT64':
       return 'FLOAT';
     case 'DECIMAL':
     case 'NUMERIC':
@@ -656,6 +668,11 @@ function convertWithType(value: unknown, type: GQLValueKind): GQLValue {
     case 'NULL':
       return GQLValue.null();
     case 'BOOL':
+      // Handle string booleans from server
+      if (typeof value === 'string') {
+        const lower = value.toLowerCase();
+        return GQLValue.bool(lower === 'true' || lower === '1' || lower === 't');
+      }
       return GQLValue.bool(Boolean(value));
     case 'INT':
       if (typeof value === 'number') {
@@ -665,7 +682,12 @@ function convertWithType(value: unknown, type: GQLValueKind): GQLValue {
         return GQLValue.int(value);
       }
       if (typeof value === 'string') {
-        return GQLValue.int(BigInt(value));
+        // Handle empty string or non-numeric gracefully
+        const trimmed = value.trim();
+        if (trimmed === '' || isNaN(Number(trimmed))) {
+          return GQLValue.int(0);
+        }
+        return GQLValue.int(BigInt(trimmed));
       }
       return GQLValue.int(0);
     case 'FLOAT':
@@ -673,7 +695,12 @@ function convertWithType(value: unknown, type: GQLValueKind): GQLValue {
     case 'DECIMAL':
       return GQLValue.decimal(String(value));
     case 'STRING':
-      return GQLValue.string(String(value));
+      // If the value is actually a different type (not a string), infer type from value
+      // This handles cases where server reports "text" but sends typed values
+      if (typeof value !== 'string') {
+        return fromJSON(value);
+      }
+      return GQLValue.string(value);
     case 'UUID':
       return GQLValue.uuid(String(value));
     case 'BYTEA':
@@ -699,8 +726,30 @@ function convertWithType(value: unknown, type: GQLValueKind): GQLValue {
       if (Array.isArray(value)) {
         return GQLValue.array(value.map((v) => fromJSON(v)));
       }
+      // Handle JSON string arrays from server
+      if (typeof value === 'string') {
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed)) {
+            return GQLValue.array(parsed.map((v: unknown) => fromJSON(v)));
+          }
+        } catch {
+          // Not valid JSON, return empty array
+        }
+      }
       return GQLValue.array([]);
     case 'OBJECT':
+      // Handle JSON string objects from server
+      if (typeof value === 'string') {
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+            return fromJSON(parsed);
+          }
+        } catch {
+          // Not valid JSON
+        }
+      }
       return fromJSON(value);
     case 'NODE':
       return GQLValue.node(value as GQLNode);

@@ -241,19 +241,47 @@ export class MatrixQuicTransport extends BaseTransport {
       try {
         while (!this._closed) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            // Stream ended - reject any pending reads
+            this.rejectPendingReads(
+              new TransportError({
+                operation: 'read',
+                cause: new Error('Stream ended unexpectedly'),
+              })
+            );
+            break;
+          }
           if (value) {
             this.processData(Buffer.from(value));
           }
         }
-      } catch {
-        // Stream closed or error
+      } catch (err) {
+        // Stream error - reject any pending reads with the error
+        if (!this._closed) {
+          this.rejectPendingReads(
+            new TransportError({
+              operation: 'read',
+              cause: err instanceof Error ? err : new Error(String(err)),
+            })
+          );
+        }
       } finally {
         reader.releaseLock();
       }
     };
 
     void read();
+  }
+
+  /**
+   * Reject all pending reads with an error.
+   */
+  private rejectPendingReads(error: Error): void {
+    const pending = this._pendingReads;
+    this._pendingReads = [];
+    for (const p of pending) {
+      p.reject(error);
+    }
   }
 
   /**
@@ -323,14 +351,22 @@ export class MatrixQuicTransport extends BaseTransport {
 
     // Wait for data
     return new Promise((resolve, reject) => {
+      const pendingRead = { resolve, reject };
+
       if (signal) {
         const onAbort = () => {
+          // CRITICAL: Remove this pending read from the queue before rejecting
+          // to prevent data loss when the abort signal fires after data arrives
+          const idx = this._pendingReads.indexOf(pendingRead);
+          if (idx !== -1) {
+            this._pendingReads.splice(idx, 1);
+          }
           reject(new TransportError({ operation: 'receive', cause: new Error('Aborted') }));
         };
         signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      this._pendingReads.push({ resolve, reject });
+      this._pendingReads.push(pendingRead);
     });
   }
 
@@ -431,14 +467,22 @@ export class MockTransport extends BaseTransport {
     }
 
     return new Promise((resolve, reject) => {
+      const pendingRead = { resolve, reject };
+
       if (signal) {
         const onAbort = () => {
+          // CRITICAL: Remove this pending read from the queue before rejecting
+          // to prevent data loss when the abort signal fires after data arrives
+          const idx = this._pendingReads.indexOf(pendingRead);
+          if (idx !== -1) {
+            this._pendingReads.splice(idx, 1);
+          }
           reject(new TransportError({ operation: 'receive', cause: new Error('Aborted') }));
         };
         signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      this._pendingReads.push({ resolve, reject });
+      this._pendingReads.push(pendingRead);
     });
   }
 

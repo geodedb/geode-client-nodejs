@@ -61,13 +61,24 @@ describe('protocol', () => {
       expect(() => parseFrame('not json')).toThrow(TransportError);
     });
 
-    it('should throw TransportError for missing result.type', () => {
+    it('should throw TransportError for missing result.type and no status_class', () => {
+      // Frame with neither result.type nor top-level status_class should throw
+      const json = JSON.stringify({
+        result: {},
+      });
+
+      expect(() => parseFrame(json)).toThrow(TransportError);
+    });
+
+    it('should infer STATUS type for frame with status_class but no result.type', () => {
+      // Server may send simple status responses with status_class at top level
       const json = JSON.stringify({
         status_class: '00000',
         result: {},
       });
 
-      expect(() => parseFrame(json)).toThrow(TransportError);
+      const frame = parseFrame(json);
+      expect(frame.result.type).toBe('STATUS');
     });
   });
 

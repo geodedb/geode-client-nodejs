@@ -149,9 +149,10 @@ export class Connection {
     // Don't throw on authentication errors during HELLO when no auth is configured
     // The server may return this error but still accept the connection
     if (isErrorFrame(frame)) {
-      const statusClass = frame.status_class || frame.result.code;
+      const statusClass = frame.status_class ?? frame.result.code;
       // 28000 is "invalid authorization specification" - ignore if no credentials provided
-      if (statusClass !== '28000' || this._config.username || this._config.password) {
+      const hasCredentials = Boolean(this._config.username) || Boolean(this._config.password);
+      if (statusClass !== '28000' || hasCredentials) {
         throw frameToError(frame);
       }
       // Otherwise, continue - the connection is still valid
@@ -365,12 +366,16 @@ export class Connection {
     };
   }
 
-  private async _tryReceiveInlineFrame(signal?: AbortSignal): Promise<ReturnType<typeof parseFrame> | null> {
+  private async _tryReceiveInlineFrame(
+    signal?: AbortSignal
+  ): Promise<ReturnType<typeof parseFrame> | null> {
     if (signal?.aborted) {
       return null;
     }
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1);
+    // Use 10ms timeout to check for inline data - gives time for data in network
+    // buffers to be processed while still being fast enough for latency-sensitive queries
+    const timeoutId = setTimeout(() => controller.abort(), 10);
     try {
       const data = await this._transport.receive(controller.signal);
       return parseFrame(data);
