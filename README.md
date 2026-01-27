@@ -572,18 +572,13 @@ npm run test:integration
 
 See [CLAUDE.md](./CLAUDE.md) for development guidelines.
 
+### Development Setup
+
 ```bash
-# Clone repository
 git clone https://gitlab.com/devnw/geode/geode-client-nodejs.git
 cd geode-client-nodejs
-
-# Install dependencies
 npm install
-
-# Run tests
 npm test
-
-# Build
 npm run build
 ```
 
