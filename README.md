@@ -15,7 +15,7 @@ A high-performance Node.js client library for the [Geode](https://gitlab.com/dev
 ## Installation
 
 ```bash
-npm install @geode/client
+npm install @geodedb/client
 ```
 
 **Requirements:**
@@ -26,7 +26,7 @@ npm install @geode/client
 ## Quick Start
 
 ```typescript
-import { createClient } from '@geode/client';
+import { createClient } from '@geodedb/client';
 
 // Connect to Geode
 const client = await createClient('geode://localhost:3141');
@@ -209,7 +209,7 @@ try {
 ### Query Builder
 
 ```typescript
-import { query, pattern, predicate } from '@geode/client';
+import { query, pattern, predicate } from '@geodedb/client';
 
 // Build complex queries
 const q = query()
@@ -231,7 +231,7 @@ const rows = await client.queryAll(gql, { params });
 ### Prepared Statements
 
 ```typescript
-import { PreparedStatement } from '@geode/client';
+import { PreparedStatement } from '@geodedb/client';
 
 // Prepare a statement once
 const stmt = await client.prepare('MATCH (n:Person {name: $name}) RETURN n');
@@ -254,7 +254,7 @@ stmt.close();
 ### Query Explain/Profile
 
 ```typescript
-import { explain, profile, formatPlan, formatProfile } from '@geode/client';
+import { explain, profile, formatPlan, formatProfile } from '@geodedb/client';
 
 // Get query execution plan
 const plan = await client.explain('MATCH (n:Person)-[:KNOWS]->(m) RETURN n, m');
@@ -278,7 +278,7 @@ console.log(formatProfile(prof));
 ### Batch Operations
 
 ```typescript
-import { batch, batchMap, batchParallel } from '@geode/client';
+import { batch, batchMap, batchParallel } from '@geodedb/client';
 
 // Execute multiple queries in a batch
 const summary = await client.batch([
@@ -304,7 +304,7 @@ await batchMap(conn, 'CREATE (n:Person {name: $name})', people);
 ### Authentication Client
 
 ```typescript
-import { AuthClient } from '@geode/client';
+import { AuthClient } from '@geodedb/client';
 
 const auth = await client.auth();
 
@@ -360,7 +360,7 @@ try {
 The client provides a comprehensive GQL type system:
 
 ```typescript
-import { GQLValue, fromJSON } from '@geode/client';
+import { GQLValue, fromJSON } from '@geodedb/client';
 
 // Create typed values
 const intVal = GQLValue.int(42);
@@ -418,7 +418,7 @@ import {
   ConfigError,
   SecurityError,
   isRetryableError,
-} from '@geode/client';
+} from '@geodedb/client';
 
 try {
   await client.queryAll('INVALID QUERY');

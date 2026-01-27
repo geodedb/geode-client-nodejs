@@ -208,6 +208,29 @@ export class Connection {
 
       const columns = getColumnsFromSchema(schemaFrame);
 
+      // Inline RUN+PULL: check if a bindings frame already arrived.
+      const inlineFrame = await this._tryReceiveInlineFrame(signal);
+      if (inlineFrame) {
+        if (isErrorFrame(inlineFrame)) {
+          this._state = this._inTransaction ? 'in_transaction' : 'idle';
+          throw frameToError(inlineFrame);
+        }
+
+        const result = new QueryResult(
+          this,
+          columns,
+          inlineFrame.result.rows ?? [],
+          inlineFrame.result.final ?? true,
+          inlineFrame.result.ordered ?? false,
+          inlineFrame.result.order_keys ?? [],
+          options?.pageSize ?? this._config.pageSize,
+          signal
+        );
+
+        this._activeResult = result;
+        return result;
+      }
+
       // Send first PULL
       this._requestId++;
       const pageSize = options?.pageSize ?? this._config.pageSize;
@@ -294,6 +317,14 @@ export class Connection {
       if (isErrorFrame(frame)) {
         throw frameToError(frame);
       }
+
+      // Drain any inline BINDINGS frame to keep the stream aligned.
+      if (frame.result.type === RespType.SCHEMA) {
+        const inlineFrame = await this._tryReceiveInlineFrame(signal);
+        if (inlineFrame && isErrorFrame(inlineFrame)) {
+          throw frameToError(inlineFrame);
+        }
+      }
     } finally {
       this._state = this._inTransaction ? 'in_transaction' : 'idle';
     }
@@ -332,6 +363,25 @@ export class Connection {
       rows: [],
       final: true,
     };
+  }
+
+  private async _tryReceiveInlineFrame(signal?: AbortSignal): Promise<ReturnType<typeof parseFrame> | null> {
+    if (signal?.aborted) {
+      return null;
+    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1);
+    try {
+      const data = await this._transport.receive(controller.signal);
+      return parseFrame(data);
+    } catch (err) {
+      if (err instanceof TransportError && err.cause?.message === 'Aborted') {
+        return null;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   /**

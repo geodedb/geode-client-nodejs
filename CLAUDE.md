@@ -207,7 +207,7 @@ value.toJS(); // 42 (auto-converts based on safety)
 ### Basic Usage
 
 ```typescript
-import { createClient } from '@geode/client';
+import { createClient } from '@geodedb/client';
 
 const client = await createClient('geode://localhost:3141');
 const rows = await client.queryAll('MATCH (n) RETURN n LIMIT 10');
@@ -239,7 +239,7 @@ const rows = await client.queryAll('MATCH (n) RETURN n');
 ### Query Builder
 
 ```typescript
-import { query, pattern, predicate } from '@geode/client';
+import { query, pattern, predicate } from '@geodedb/client';
 
 const q = query()
   .match(
