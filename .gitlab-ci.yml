@@ -13,6 +13,7 @@ stages:
   - build
   - test
   - security
+  - sbom
   - publish
   - release
 
@@ -75,6 +76,15 @@ include:
   - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@~latest
     inputs:
       stage: security
+
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@~latest
+
+  # SBOM generation and scanning
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@~latest
+
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@~latest
+    inputs:
+      allow_failure: true
 
   # Publishing (only on tags)
   - component: gitlab.com/devnw/ci-catalog/node-publish@v1.9.2
