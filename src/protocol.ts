@@ -95,13 +95,35 @@ export function parseFrame(data: Buffer | string): Frame {
     // Note: Some responses (like HELLO) may have a simpler structure
     if (!frame.result || typeof frame.result.type !== 'string') {
       // Check if this is a top-level response (non-nested)
-      const topLevel = frame as unknown as { type?: string; status_class?: string };
+      const topLevel = frame as unknown as {
+        type?: string;
+        status_class?: string;
+        columns?: unknown[];
+        rows?: unknown[];
+      };
+
       if (typeof topLevel.type === 'string') {
-        // Convert to expected frame structure
+        // Convert to expected frame structure (ERROR, HELLO, etc.)
         return {
           status_class: topLevel.status_class ?? '00000',
           status_subclass: '000',
           result: frame as unknown as FrameResult,
+        };
+      }
+
+      // Handle responses without type field (like BEGIN/COMMIT/ROLLBACK responses)
+      // These have status_class and possibly columns/rows but no explicit type
+      if (typeof topLevel.status_class === 'string') {
+        // Determine type based on content
+        const resultType = Array.isArray(topLevel.columns) ? RespType.BINDINGS : RespType.STATUS;
+
+        return {
+          status_class: topLevel.status_class,
+          status_subclass: '000',
+          result: {
+            type: resultType,
+            ...frame,
+          } as FrameResult,
         };
       }
 

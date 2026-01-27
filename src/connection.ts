@@ -134,6 +134,10 @@ export class Connection {
 
   /**
    * Perform the HELLO handshake.
+   *
+   * Note: The server may return an ERROR frame with "Authentication required"
+   * even when no authentication is configured. This is a known server behavior
+   * that should be treated as a successful connection (matching other clients).
    */
   private async hello(): Promise<void> {
     const msg = buildHelloMessage(this._config);
@@ -142,8 +146,15 @@ export class Connection {
     const data = await this._transport.receive();
     const frame = parseFrame(data);
 
+    // Don't throw on authentication errors during HELLO when no auth is configured
+    // The server may return this error but still accept the connection
     if (isErrorFrame(frame)) {
-      throw frameToError(frame);
+      const statusClass = frame.status_class || frame.result.code;
+      // 28000 is "invalid authorization specification" - ignore if no credentials provided
+      if (statusClass !== '28000' || this._config.username || this._config.password) {
+        throw frameToError(frame);
+      }
+      // Otherwise, continue - the connection is still valid
     }
   }
 

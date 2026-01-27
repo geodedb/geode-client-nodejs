@@ -150,6 +150,7 @@ export function defaultConfig(): GeodeConfig {
  *   - GEODE_PASSWORD: Default password
  */
 export function parseDSN(dsn: string): GeodeConfig {
+  // CANARY: REQ=REQ-CLIENT-NODEJS-001; FEATURE="NodejsClientConnect"; ASPECT=DSNParse; STATUS=IMPL; OWNER=clients; UPDATED=2025-02-14
   const cfg = defaultConfig();
 
   // Apply environment variable defaults
