@@ -88,7 +88,7 @@ include:
 
   # Publishing with OIDC trusted publishing (only on tags)
   # Requires trusted publisher configured on npmjs.com
-  - component: gitlab.com/devnw/ci-catalog/node-publish@v1.9.8
+  - component: gitlab.com/devnw/ci-catalog/node-publish@v1.9.10
     inputs:
       stage: publish
       node_version: '22'
