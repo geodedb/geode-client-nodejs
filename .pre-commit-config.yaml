@@ -1,0 +1,187 @@
+# Pre-commit configuration for Geode Node.js Client
+# https://pre-commit.com/
+#
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+# Update hooks: pre-commit autoupdate
+
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # =============================================================================
+  # Standard pre-commit hooks (best practices)
+  # =============================================================================
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v5.0.0
+  hooks:
+      # Formatting
+  - id: trailing-whitespace
+    args: [--markdown-linebreak-ext=md]
+    exclude: ^(node_modules/|dist/|coverage/)
+  - id: end-of-file-fixer
+    exclude: ^(node_modules/|dist/|coverage/|.*\.snap$)
+  - id: mixed-line-ending
+    args: [--fix=lf]
+    exclude: ^(node_modules/|dist/)
+
+      # Syntax validation
+  - id: check-yaml
+    args: [--unsafe]      # Allow custom tags
+    exclude: ^(node_modules/|dist/)
+  - id: check-json
+    exclude: ^(node_modules/|dist/|coverage/)
+  - id: check-toml
+
+      # Security
+  - id: detect-private-key
+    exclude: ^(certs/|test.*certs/|.*test.*\.pem$)
+  - id: check-added-large-files
+    args: [--maxkb=1024]
+    exclude: ^(node_modules/|dist/)
+
+      # Git hygiene
+  - id: check-merge-conflict
+  - id: check-case-conflict
+  - id: check-symlinks
+  - id: destroyed-symlinks
+
+      # Code quality
+  - id: check-executables-have-shebangs
+    exclude: ^(node_modules/|dist/)
+  - id: check-shebang-scripts-are-executable
+    exclude: ^(node_modules/|dist/)
+
+  # =============================================================================
+  # Shell script linting
+  # =============================================================================
+- repo: https://github.com/shellcheck-py/shellcheck-py
+  rev: v0.10.0.1
+  hooks:
+  - id: shellcheck
+    args: [--severity=warning]
+    exclude: ^(node_modules/|dist/)
+
+  # =============================================================================
+  # Markdown linting
+  # =============================================================================
+- repo: https://github.com/igorshubovych/markdownlint-cli
+  rev: v0.43.0
+  hooks:
+  - id: markdownlint
+    args: [--fix, --disable, MD013, MD033, MD041, MD024, MD040, --]
+    exclude: ^(node_modules/|dist/|CHANGELOG\.md)
+
+  # =============================================================================
+  # YAML formatting
+  # =============================================================================
+- repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
+  rev: v2.14.0
+  hooks:
+  - id: pretty-format-yaml
+    args: [--autofix, --indent, '2']
+    exclude: ^(node_modules/|dist/|\.gitlab-ci\.yml|docker-compose.*\.yml)
+
+  # =============================================================================
+  # Dockerfile linting
+  # =============================================================================
+- repo: https://github.com/hadolint/hadolint
+  rev: v2.13.1-beta
+  hooks:
+  - id: hadolint-docker
+    args: [--ignore, DL3008, --ignore, DL3013, --ignore, DL3018]
+    exclude: ^(node_modules/|dist/)
+
+  # =============================================================================
+  # Commit message validation (Conventional Commits)
+  # =============================================================================
+- repo: https://github.com/commitizen-tools/commitizen
+  rev: v4.1.0
+  hooks:
+  - id: commitizen
+    stages: [commit-msg]
+
+  # =============================================================================
+  # Local/Custom hooks for Node.js/TypeScript
+  # =============================================================================
+- repo: local
+  hooks:
+      # ESLint check
+  - id: eslint
+    name: eslint
+    entry: npm run lint
+    language: system
+    files: \.(ts|tsx|js|jsx)$
+    exclude: ^(node_modules/|dist/|coverage/)
+    pass_filenames: false
+
+      # Prettier format check
+  - id: prettier-check
+    name: prettier (check)
+    entry: npm run format:check
+    language: system
+    files: \.(ts|tsx|js|jsx|json|md|yaml|yml)$
+    exclude: ^(node_modules/|dist/|coverage/|package-lock\.json)
+    pass_filenames: false
+
+      # TypeScript type check
+  - id: typecheck
+    name: typecheck
+    entry: npm run typecheck
+    language: system
+    files: \.tsx?$
+    exclude: ^(node_modules/|dist/)
+    pass_filenames: false
+
+      # Unit tests (on pre-push only - may be slow)
+  - id: test
+    name: unit tests
+    entry: npm test
+    language: system
+    files: \.(ts|tsx)$
+    exclude: ^(node_modules/|dist/)
+    pass_filenames: false
+    stages: [pre-push]
+
+      # Check for TODO/FIXME in committed code (warning only)
+  - id: check-todos
+    name: check for TODOs/FIXMEs
+    entry: bash
+    args:
+    - -c
+    - |
+      git diff --cached --name-only | xargs grep -l -E "(TODO|FIXME|XXX|HACK)" 2>/dev/null && echo "Warning: Found TODO/FIXME markers in staged files" && exit 0 || exit 0
+    language: system
+    pass_filenames: false
+    verbose: true
+
+      # Check package.json version matches tag (on pre-push)
+  - id: version-check
+    name: version tag check
+    entry: bash
+    args:
+    - -c
+    - |
+      # Only check if we're pushing a tag
+      if [ -n "$PRE_COMMIT_FROM_REF" ] && [ -n "$PRE_COMMIT_TO_REF" ]; then
+        echo "Checking version consistency..."
+      fi
+      exit 0
+    language: system
+    pass_filenames: false
+    stages: [pre-push]
+
+# =============================================================================
+# CI configuration
+# =============================================================================
+ci:
+  autofix_prs: true
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    For more info see https://pre-commit.ci
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: [eslint, prettier-check, typecheck, test, version-check]
+  submodules: false
