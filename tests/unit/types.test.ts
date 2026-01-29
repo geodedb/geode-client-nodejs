@@ -408,6 +408,155 @@ describe('types', () => {
     });
   });
 
+  describe('Edge format normalization', () => {
+    it('should detect edge with from/to properties', () => {
+      const edge = {
+        id: '018f6b1e-7c3a-7000-8000-000000000001',
+        type: 'KNOWS',
+        from: '018f6b1e-7c3a-7000-8000-000000000002',
+        to: '018f6b1e-7c3a-7000-8000-000000000003',
+        properties: { since: 2020 },
+      };
+
+      const v = fromJSON(edge);
+
+      expect(v.kind).toBe('EDGE');
+      expect(v.asEdge.id).toBe('018f6b1e-7c3a-7000-8000-000000000001');
+      expect(v.asEdge.startNode).toBe('018f6b1e-7c3a-7000-8000-000000000002');
+      expect(v.asEdge.endNode).toBe('018f6b1e-7c3a-7000-8000-000000000003');
+      expect(v.asEdge.type).toBe('KNOWS');
+    });
+
+    it('should detect edge with startNode/endNode properties', () => {
+      const edge = {
+        id: '018f6b1e-7c3a-7000-8000-000000000001',
+        type: 'KNOWS',
+        startNode: '018f6b1e-7c3a-7000-8000-000000000002',
+        endNode: '018f6b1e-7c3a-7000-8000-000000000003',
+        properties: {},
+      };
+
+      const v = fromJSON(edge);
+
+      expect(v.kind).toBe('EDGE');
+      expect(v.asEdge.startNode).toBe('018f6b1e-7c3a-7000-8000-000000000002');
+      expect(v.asEdge.endNode).toBe('018f6b1e-7c3a-7000-8000-000000000003');
+    });
+
+    it('should normalize from/to to startNode/endNode', () => {
+      const edge = {
+        id: 'edge-1',
+        type: 'REL',
+        from: 'node-1',
+        to: 'node-2',
+      };
+
+      const v = fromJSON(edge);
+      const normalized = v.asEdge;
+
+      // Should have startNode/endNode, not from/to
+      expect(normalized.startNode).toBe('node-1');
+      expect(normalized.endNode).toBe('node-2');
+      expect((normalized as unknown as { from?: string }).from).toBeUndefined();
+      expect((normalized as unknown as { to?: string }).to).toBeUndefined();
+    });
+
+    it('should handle edge with type hint and from/to format', () => {
+      const edge = {
+        id: 'edge-1',
+        type: 'REL',
+        from: 'node-1',
+        to: 'node-2',
+      };
+
+      const v = fromJSON(edge, 'EDGE');
+
+      expect(v.kind).toBe('EDGE');
+      expect(v.asEdge.startNode).toBe('node-1');
+      expect(v.asEdge.endNode).toBe('node-2');
+    });
+
+    it('should handle missing properties in edge', () => {
+      const edge = {
+        id: 'edge-1',
+        type: 'REL',
+        from: 'node-1',
+        to: 'node-2',
+        // no properties field
+      };
+
+      const v = fromJSON(edge);
+
+      expect(v.kind).toBe('EDGE');
+      expect(v.asEdge.properties).toEqual({});
+    });
+  });
+
+  describe('UUIDv7 ID support', () => {
+    // UUIDv7 format: time-based UUID
+    const uuidv7Node1 = '018f6b1e-7c3a-7000-8000-000000000001';
+    const uuidv7Node2 = '018f6b1e-7c3a-7000-8000-000000000002';
+    const uuidv7Edge = '018f6b1e-7c3a-7000-8000-000000000003';
+
+    it('should handle UUIDv7 node IDs', () => {
+      const node = {
+        id: uuidv7Node1,
+        labels: ['Person'],
+        properties: { name: 'Alice' },
+      };
+
+      const v = fromJSON(node);
+
+      expect(v.kind).toBe('NODE');
+      expect(v.asNode.id).toBe(uuidv7Node1);
+    });
+
+    it('should handle UUIDv7 edge IDs and references', () => {
+      const edge = {
+        id: uuidv7Edge,
+        type: 'KNOWS',
+        from: uuidv7Node1,
+        to: uuidv7Node2,
+        properties: {},
+      };
+
+      const v = fromJSON(edge);
+
+      expect(v.kind).toBe('EDGE');
+      expect(v.asEdge.id).toBe(uuidv7Edge);
+      expect(v.asEdge.startNode).toBe(uuidv7Node1);
+      expect(v.asEdge.endNode).toBe(uuidv7Node2);
+    });
+
+    it('should preserve UUIDv7 equality between edge and node references', () => {
+      const node = {
+        id: uuidv7Node1,
+        labels: ['Person'],
+        properties: {},
+      };
+      const edge = {
+        id: uuidv7Edge,
+        type: 'KNOWS',
+        from: uuidv7Node1,
+        to: uuidv7Node2,
+        properties: {},
+      };
+
+      const nodeValue = fromJSON(node);
+      const edgeValue = fromJSON(edge);
+
+      // Critical: edge.startNode must equal node.id
+      expect(edgeValue.asEdge.startNode).toBe(nodeValue.asNode.id);
+    });
+
+    it('should detect UUIDv7 as UUID type when standalone', () => {
+      const v = fromJSON(uuidv7Node1);
+
+      expect(v.kind).toBe('UUID');
+      expect(v.asString).toBe(uuidv7Node1);
+    });
+  });
+
   describe('BigInt support', () => {
     it('should handle BigInt values in GQLValue.int', () => {
       const largeId = BigInt('115974477121658528');

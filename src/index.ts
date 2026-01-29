@@ -46,6 +46,7 @@ export {
   type GQLId,
   type GQLNode,
   type GQLEdge,
+  type RawEdge,
   type GQLPath,
   GQLValue,
   parseGQLType,

@@ -116,6 +116,12 @@ export interface GQLNode {
 
 /**
  * Edge structure from graph queries.
+ *
+ * Note: The server may return edge endpoints as either:
+ * - `startNode`/`endNode` (normalized form used by the client)
+ * - `from`/`to` (alternative wire format)
+ *
+ * The client normalizes both formats to `startNode`/`endNode`.
  */
 export interface GQLEdge {
   id: GQLId;
@@ -123,6 +129,20 @@ export interface GQLEdge {
   startNode: GQLId;
   endNode: GQLId;
   properties: Record<string, unknown>;
+}
+
+/**
+ * Raw edge structure as it may appear in wire format.
+ * Used internally for parsing before normalization.
+ */
+export interface RawEdge {
+  id: GQLId;
+  type: string;
+  startNode?: GQLId;
+  endNode?: GQLId;
+  from?: GQLId;
+  to?: GQLId;
+  properties?: Record<string, unknown>;
 }
 
 /**
@@ -652,9 +672,23 @@ export function fromJSON(value: unknown, typeHint?: GQLValueKind): GQLValue {
       return GQLValue.node(obj as unknown as GQLNode);
     }
 
-    // Check for edge structure
-    if ('id' in obj && 'type' in obj && 'startNode' in obj && 'endNode' in obj) {
-      return GQLValue.edge(obj as unknown as GQLEdge);
+    // Check for edge structure (supports both startNode/endNode and from/to formats)
+    if ('id' in obj && 'type' in obj) {
+      const hasStartEnd = 'startNode' in obj && 'endNode' in obj;
+      const hasFromTo = 'from' in obj && 'to' in obj;
+
+      if (hasStartEnd || hasFromTo) {
+        // Normalize to startNode/endNode format
+        const rawEdge = obj as unknown as RawEdge;
+        const normalizedEdge: GQLEdge = {
+          id: rawEdge.id,
+          type: rawEdge.type,
+          startNode: rawEdge.startNode ?? rawEdge.from ?? '',
+          endNode: rawEdge.endNode ?? rawEdge.to ?? '',
+          properties: rawEdge.properties ?? {},
+        };
+        return GQLValue.edge(normalizedEdge);
+      }
     }
 
     // Check for path structure
@@ -766,8 +800,18 @@ function convertWithType(value: unknown, type: GQLValueKind): GQLValue {
       return fromJSON(value);
     case 'NODE':
       return GQLValue.node(value as GQLNode);
-    case 'EDGE':
-      return GQLValue.edge(value as GQLEdge);
+    case 'EDGE': {
+      // Normalize edge format (supports both startNode/endNode and from/to)
+      const rawEdge = value as RawEdge;
+      const normalizedEdge: GQLEdge = {
+        id: rawEdge.id,
+        type: rawEdge.type,
+        startNode: rawEdge.startNode ?? rawEdge.from ?? '',
+        endNode: rawEdge.endNode ?? rawEdge.to ?? '',
+        properties: rawEdge.properties ?? {},
+      };
+      return GQLValue.edge(normalizedEdge);
+    }
     case 'PATH':
       return GQLValue.path(value as GQLPath);
     default:

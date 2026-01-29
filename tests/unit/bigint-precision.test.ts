@@ -751,6 +751,130 @@ describe('BigInt Precision', () => {
   });
 });
 
+describe('Edge from/to Format', () => {
+  /**
+   * Tests for edge format with from/to properties instead of startNode/endNode.
+   * This is the actual format returned by the Geode server.
+   *
+   * Note: Edge normalization (from/to -> startNode/endNode) happens in fromJSON/parseRow,
+   * not in parseFrame. These tests verify the full flow using the proper APIs.
+   */
+
+  it('should normalize edge with from/to properties via fromJSON', () => {
+    const rawEdge = {
+      id: '018f6b1e-7c3a-7000-8000-000000000001',
+      type: 'HAS_ACL',
+      from: '018f6b1e-7c3a-7000-8000-000000000002',
+      to: '018f6b1e-7c3a-7000-8000-000000000003',
+      properties: {},
+    };
+
+    const edgeValue = fromJSON(rawEdge);
+
+    expect(edgeValue.kind).toBe('EDGE');
+    // Edge should be normalized to startNode/endNode
+    expect(edgeValue.asEdge.startNode).toBe('018f6b1e-7c3a-7000-8000-000000000002');
+    expect(edgeValue.asEdge.endNode).toBe('018f6b1e-7c3a-7000-8000-000000000003');
+  });
+
+  it('should normalize edge via parseRow with EDGE type hint', () => {
+    const rawRow = {
+      r: {
+        id: '018f6b1e-7c3a-7000-8000-000000000001',
+        type: 'HAS_ACL',
+        from: '018f6b1e-7c3a-7000-8000-000000000002',
+        to: '018f6b1e-7c3a-7000-8000-000000000003',
+        properties: {},
+      },
+    };
+    const columns = [{ name: 'r', type: 'EDGE' as const, kind: 'EDGE' as const }];
+
+    const row = parseRow(rawRow, columns);
+    const edge = row.get('r')?.asEdge;
+
+    expect(edge?.startNode).toBe('018f6b1e-7c3a-7000-8000-000000000002');
+    expect(edge?.endNode).toBe('018f6b1e-7c3a-7000-8000-000000000003');
+  });
+
+  it('should ensure edge from matches node id with UUIDv7', () => {
+    const nodeId = '018f6b1e-7c3a-7000-8000-000000000002';
+    const rawNode = {
+      id: nodeId,
+      labels: ['Firewall'],
+      properties: { name: 'fw1' },
+    };
+    const rawEdge = {
+      id: '018f6b1e-7c3a-7000-8000-000000000001',
+      type: 'HAS_ACL',
+      from: nodeId,
+      to: '018f6b1e-7c3a-7000-8000-000000000003',
+      properties: {},
+    };
+
+    const nodeValue = fromJSON(rawNode);
+    const edgeValue = fromJSON(rawEdge);
+
+    // Critical: edge.startNode must equal node.id
+    expect(edgeValue.asEdge.startNode).toBe(nodeValue.asNode.id);
+    expect(edgeValue.asEdge.startNode).toBe(nodeId);
+  });
+
+  it('should handle full row with node and edge via rowToObject', () => {
+    const nodeId = '018f6b1e-7c3a-7000-8000-000000000002';
+    const rawRow = {
+      n: {
+        id: nodeId,
+        labels: ['Firewall'],
+        properties: { name: 'fw1' },
+      },
+      r: {
+        id: '018f6b1e-7c3a-7000-8000-000000000001',
+        type: 'HAS_ACL',
+        from: nodeId,
+        to: '018f6b1e-7c3a-7000-8000-000000000003',
+        properties: {},
+      },
+    };
+    const columns = [
+      { name: 'n', type: 'NODE' as const, kind: 'NODE' as const },
+      { name: 'r', type: 'EDGE' as const, kind: 'EDGE' as const },
+    ];
+
+    const row = parseRow(rawRow, columns);
+    const obj = rowToObject(row);
+
+    const node = obj['n'] as GQLNode;
+    const edge = obj['r'] as GQLEdge;
+
+    // Critical: edge.startNode must equal node.id
+    expect(edge.startNode).toBe(node.id);
+  });
+
+  it('should handle mixed startNode/endNode and from/to formats', () => {
+    const edge1 = fromJSON({
+      id: 'edge-1',
+      type: 'REL1',
+      from: 'node-1',
+      to: 'node-2',
+      properties: {},
+    });
+
+    const edge2 = fromJSON({
+      id: 'edge-2',
+      type: 'REL2',
+      startNode: 'node-2',
+      endNode: 'node-3',
+      properties: {},
+    });
+
+    // Both should be normalized to startNode/endNode
+    expect(edge1.asEdge.startNode).toBe('node-1');
+    expect(edge1.asEdge.endNode).toBe('node-2');
+    expect(edge2.asEdge.startNode).toBe('node-2');
+    expect(edge2.asEdge.endNode).toBe('node-3');
+  });
+});
+
 describe('Regression Tests: ID Precision Loss', () => {
   /**
    * These tests specifically verify that the precision loss bug is fixed
