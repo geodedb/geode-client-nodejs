@@ -4,10 +4,42 @@
  * JSON line protocol implementation for communication with Geode server.
  */
 
+import {
+  parse as losslessParse,
+  stringify as losslessStringify,
+  isLosslessNumber,
+  type NumberStringifier,
+} from 'lossless-json';
 import type { GeodeConfig } from './config.js';
 import { DriverError, TransportError, StatusClass } from './errors.js';
 import type { ColumnDef, ColumnInfo } from './types.js';
 import { parseGQLType } from './types.js';
+
+/**
+ * Custom reviver for lossless-json that converts numbers to BigInt
+ * when they exceed JavaScript's safe integer range, preserving precision.
+ *
+ * This fixes the bug where node/edge IDs (which are often 18+ digit integers)
+ * lose precision when parsed with standard JSON.parse().
+ */
+function bigIntReviver(_key: string, value: unknown): unknown {
+  if (isLosslessNumber(value)) {
+    const str = (value as { value: string }).value;
+    // Check if it's an integer (no decimal point or exponent)
+    if (/^-?\d+$/.test(str)) {
+      const num = Number(str);
+      // If the number is within safe range, return as number
+      if (Number.isSafeInteger(num)) {
+        return num;
+      }
+      // Otherwise return as BigInt to preserve precision
+      return BigInt(str);
+    }
+    // For floats, use regular number conversion
+    return Number(str);
+  }
+  return value;
+}
 
 // Client message types
 export const MsgType = {
@@ -79,6 +111,9 @@ export interface Frame {
 
 /**
  * Parse a JSON frame from raw bytes.
+ *
+ * Uses lossless-json to preserve precision for large integers (> Number.MAX_SAFE_INTEGER).
+ * This is critical for node/edge IDs which may be 18+ digit integers.
  */
 export function parseFrame(data: Buffer | string): Frame {
   let str: string;
@@ -89,7 +124,8 @@ export function parseFrame(data: Buffer | string): Frame {
   }
 
   try {
-    const frame = JSON.parse(str) as Frame;
+    // Use lossless-json with custom reviver to preserve large integer precision
+    const frame = losslessParse(str, bigIntReviver) as Frame;
 
     // Validate frame structure
     // Note: Some responses (like HELLO) may have a simpler structure
@@ -330,10 +366,22 @@ export function buildPingMessage(): Record<string, unknown> {
 }
 
 /**
+ * Custom stringifier for BigInt values.
+ * Serializes BigInt as numbers without quotes to maintain wire protocol compatibility.
+ */
+const bigIntStringifier: NumberStringifier = {
+  test: (value: unknown): boolean => typeof value === 'bigint',
+  stringify: (value: unknown): string => (value as bigint).toString(),
+};
+
+/**
  * Serialize a message to JSON line format.
+ *
+ * Uses lossless-json with a custom BigInt stringifier to properly serialize
+ * BigInt values as numbers without quotes, maintaining wire protocol compatibility.
  */
 export function serializeMessage(msg: Record<string, unknown>): Buffer {
-  const json = JSON.stringify(msg);
+  const json = losslessStringify(msg, undefined, undefined, [bigIntStringifier]);
   return Buffer.from(json + '\n', 'utf-8');
 }
 

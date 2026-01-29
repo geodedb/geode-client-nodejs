@@ -61,7 +61,8 @@
   },
   "dependencies": {
     "@matrixai/quic": "^2.0.9",
-    "decimal.js-light": "^2.5.1"
+    "decimal.js-light": "^2.5.1",
+    "lossless-json": "^4.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

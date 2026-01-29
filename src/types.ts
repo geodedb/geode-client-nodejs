@@ -93,10 +93,23 @@ export interface GQLRange<T = unknown> {
 }
 
 /**
+ * Type alias for node/edge IDs.
+ *
+ * IDs can be:
+ * - string: String-based IDs or hex format IDs
+ * - number: Integer IDs within JavaScript's safe integer range
+ * - bigint: Integer IDs larger than Number.MAX_SAFE_INTEGER (2^53 - 1)
+ *
+ * Note: Geode's internal IDs often exceed JavaScript's safe integer limit,
+ * so bigint is used to preserve full precision.
+ */
+export type GQLId = string | number | bigint;
+
+/**
  * Node structure from graph queries.
  */
 export interface GQLNode {
-  id: string | number;
+  id: GQLId;
   labels: string[];
   properties: Record<string, unknown>;
 }
@@ -105,10 +118,10 @@ export interface GQLNode {
  * Edge structure from graph queries.
  */
 export interface GQLEdge {
-  id: string | number;
+  id: GQLId;
   type: string;
-  startNode: string | number;
-  endNode: string | number;
+  startNode: GQLId;
+  endNode: GQLId;
   properties: Record<string, unknown>;
 }
 

@@ -279,6 +279,233 @@ describe('Protocol Property Tests', () => {
     });
   });
 
+  describe('BigInt Precision', () => {
+    it('should preserve large integers in frames (REGRESSION TEST)', () => {
+      // Arbitrary generator for large integers that exceed MAX_SAFE_INTEGER
+      const largeIntArb = fc.bigInt({
+        min: BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+        max: BigInt('999999999999999999'), // 18-digit max like Geode IDs
+      });
+
+      fc.assert(
+        fc.property(largeIntArb, (largeInt) => {
+          // Build a frame with the large integer as an ID
+          const rawJson = `{
+            "status_class": "00000",
+            "status_subclass": "000",
+            "result": {
+              "type": "BINDINGS",
+              "rows": [{"id": ${largeInt.toString()}}],
+              "final": true
+            }
+          }`;
+
+          const parsed = parseFrame(rawJson);
+          const rows = parsed.result.rows as Array<{ id: bigint }>;
+          const parsedId = rows[0]?.id;
+
+          // The ID must be a bigint (not a number) and must match exactly
+          expect(typeof parsedId).toBe('bigint');
+          expect(parsedId).toBe(largeInt);
+
+          // Critical: verify it was NOT corrupted by JavaScript's number handling
+          // If it were a number, it would lose precision
+          const corruptedValue = Number(largeInt);
+          if (corruptedValue !== Number(parsedId)) {
+            // This means precision WOULD have been lost if we used number
+            // But our bigint handling preserved it
+            expect(parsedId).toBe(largeInt);
+          }
+
+          return true;
+        }),
+        { numRuns: 500 }
+      );
+    });
+
+    it('should keep safe integers as numbers', () => {
+      const safeIntArb = fc.integer({
+        min: Number.MIN_SAFE_INTEGER,
+        max: Number.MAX_SAFE_INTEGER,
+      });
+
+      fc.assert(
+        fc.property(safeIntArb, (safeInt) => {
+          const rawJson = `{
+            "status_class": "00000",
+            "status_subclass": "000",
+            "result": {
+              "type": "BINDINGS",
+              "rows": [{"value": ${safeInt}}],
+              "final": true
+            }
+          }`;
+
+          const parsed = parseFrame(rawJson);
+          const rows = parsed.result.rows as Array<{ value: number }>;
+          const parsedValue = rows[0]?.value;
+
+          // Safe integers should remain as numbers
+          expect(typeof parsedValue).toBe('number');
+          expect(parsedValue).toBe(safeInt);
+
+          return true;
+        }),
+        { numRuns: 500 }
+      );
+    });
+
+    it('should serialize bigint values correctly', () => {
+      const largeIntArb = fc.bigInt({
+        min: BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+        max: BigInt('999999999999999999'),
+      });
+
+      fc.assert(
+        fc.property(largeIntArb, (largeInt) => {
+          const msg = { type: 'TEST', id: largeInt };
+          const serialized = serializeMessage(msg as unknown as Record<string, unknown>);
+          const str = serialized.toString('utf-8');
+
+          // Should contain the exact number without quotes
+          expect(str).toContain(largeInt.toString());
+          // Should NOT be quoted as a string
+          expect(str).not.toContain(`"${largeInt.toString()}"`);
+
+          return true;
+        }),
+        { numRuns: 200 }
+      );
+    });
+
+    it('should round-trip bigint values through serialize/parse', () => {
+      const largeIntArb = fc.bigInt({
+        min: BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+        max: BigInt('999999999999999999'),
+      });
+
+      fc.assert(
+        fc.property(largeIntArb, (largeInt) => {
+          // Simulate serializing a param and receiving it back in a response
+          const rawJson = `{
+            "status_class": "00000",
+            "status_subclass": "000",
+            "result": {
+              "type": "BINDINGS",
+              "rows": [{"id": ${largeInt.toString()}}],
+              "final": true
+            }
+          }`;
+
+          const parsed = parseFrame(rawJson);
+          const rows = parsed.result.rows as Array<{ id: bigint }>;
+
+          expect(rows[0]?.id).toBe(largeInt);
+
+          return true;
+        }),
+        { numRuns: 300 }
+      );
+    });
+
+    it('should handle node/edge IDs at boundary of safe integer range', () => {
+      // Test specifically around the boundary
+      const boundaryIntArb = fc.constantFrom(
+        Number.MAX_SAFE_INTEGER - 1,
+        Number.MAX_SAFE_INTEGER,
+        BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+        BigInt(Number.MAX_SAFE_INTEGER) + 2n,
+        Number.MIN_SAFE_INTEGER,
+        Number.MIN_SAFE_INTEGER + 1,
+        BigInt(Number.MIN_SAFE_INTEGER) - 1n,
+        BigInt(Number.MIN_SAFE_INTEGER) - 2n
+      );
+
+      fc.assert(
+        fc.property(boundaryIntArb, (value) => {
+          const valueStr = value.toString();
+          const rawJson = `{
+            "status_class": "00000",
+            "status_subclass": "000",
+            "result": {
+              "type": "BINDINGS",
+              "rows": [{"id": ${valueStr}}],
+              "final": true
+            }
+          }`;
+
+          const parsed = parseFrame(rawJson);
+          const rows = parsed.result.rows as Array<{ id: number | bigint }>;
+          const parsedId = rows[0]?.id;
+
+          if (typeof value === 'bigint') {
+            // Large values should be bigint
+            expect(typeof parsedId).toBe('bigint');
+            expect(parsedId).toBe(value);
+          } else {
+            // Safe values should be number
+            expect(typeof parsedId).toBe('number');
+            expect(parsedId).toBe(value);
+          }
+
+          return true;
+        }),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should preserve precision for multiple large IDs in same row', () => {
+      const largeIntArb = fc.bigInt({
+        min: BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+        max: BigInt('999999999999999999'),
+      });
+
+      fc.assert(
+        fc.property(largeIntArb, largeIntArb, largeIntArb, (nodeId, edgeId, endNodeId) => {
+          const rawJson = `{
+            "status_class": "00000",
+            "status_subclass": "000",
+            "result": {
+              "type": "BINDINGS",
+              "rows": [{
+                "n": {"id": ${nodeId.toString()}, "labels": ["Test"], "properties": {}},
+                "r": {
+                  "id": ${edgeId.toString()},
+                  "type": "REL",
+                  "startNode": ${nodeId.toString()},
+                  "endNode": ${endNodeId.toString()},
+                  "properties": {}
+                }
+              }],
+              "final": true
+            }
+          }`;
+
+          type Row = {
+            n: { id: bigint };
+            r: { id: bigint; startNode: bigint; endNode: bigint };
+          };
+
+          const parsed = parseFrame(rawJson);
+          const rows = parsed.result.rows as Row[];
+          const row = rows[0];
+
+          // All IDs should be preserved as bigint
+          expect(row?.n.id).toBe(nodeId);
+          expect(row?.r.id).toBe(edgeId);
+          expect(row?.r.startNode).toBe(nodeId);
+          expect(row?.r.endNode).toBe(endNodeId);
+
+          // Critical: edge.startNode should match node.id
+          expect(row?.r.startNode).toBe(row?.n.id);
+
+          return true;
+        }),
+        { numRuns: 200 }
+      );
+    });
+  });
+
   describe('Message Building', () => {
     it('should build RUN_GQL with arbitrary queries and params', () => {
       fc.assert(

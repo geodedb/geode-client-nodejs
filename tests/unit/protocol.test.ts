@@ -387,4 +387,73 @@ describe('protocol', () => {
       expect(result).toEqual({ p1: 2 });
     });
   });
+
+  describe('BigInt handling', () => {
+    it('should preserve large integers in parseFrame', () => {
+      const largeId = BigInt('115974477121658528');
+      const rawJson = `{
+        "status_class": "00000",
+        "status_subclass": "000",
+        "result": {
+          "type": "BINDINGS",
+          "rows": [{"id": 115974477121658528}],
+          "final": true
+        }
+      }`;
+
+      const frame = parseFrame(rawJson);
+      const rows = frame.result.rows as Array<{ id: bigint }>;
+
+      expect(typeof rows[0]?.id).toBe('bigint');
+      expect(rows[0]?.id).toBe(largeId);
+    });
+
+    it('should serialize BigInt in serializeMessage', () => {
+      const largeId = BigInt('115974477121658528');
+      const msg = { type: 'TEST', id: largeId };
+
+      const buf = serializeMessage(msg);
+      const str = buf.toString('utf-8');
+
+      // BigInt should be serialized as a number without quotes
+      expect(str).toContain('115974477121658528');
+      expect(str).not.toContain('"115974477121658528"');
+    });
+
+    it('should keep small integers as numbers in parseFrame', () => {
+      const rawJson = `{
+        "status_class": "00000",
+        "status_subclass": "000",
+        "result": {
+          "type": "BINDINGS",
+          "rows": [{"count": 42}],
+          "final": true
+        }
+      }`;
+
+      const frame = parseFrame(rawJson);
+      const rows = frame.result.rows as Array<{ count: number }>;
+
+      expect(typeof rows[0]?.count).toBe('number');
+      expect(rows[0]?.count).toBe(42);
+    });
+
+    it('should handle floats correctly in parseFrame', () => {
+      const rawJson = `{
+        "status_class": "00000",
+        "status_subclass": "000",
+        "result": {
+          "type": "BINDINGS",
+          "rows": [{"value": 3.14159}],
+          "final": true
+        }
+      }`;
+
+      const frame = parseFrame(rawJson);
+      const rows = frame.result.rows as Array<{ value: number }>;
+
+      expect(typeof rows[0]?.value).toBe('number');
+      expect(rows[0]?.value).toBeCloseTo(3.14159);
+    });
+  });
 });

@@ -43,6 +43,7 @@ export {
   type GQLValueKind,
   type GQLType,
   type GQLRange,
+  type GQLId,
   type GQLNode,
   type GQLEdge,
   type GQLPath,

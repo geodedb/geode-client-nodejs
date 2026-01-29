@@ -393,5 +393,112 @@ describe('types', () => {
 
       expect(obj).toEqual({ id: 42, name: 'Alice' });
     });
+
+    it('should preserve BigInt for large integers', () => {
+      const largeId = BigInt('115974477121658528');
+      const row = new Map<string, GQLValue>([
+        ['id', GQLValue.int(largeId)],
+        ['name', GQLValue.string('Alice')],
+      ]);
+
+      const obj = rowToObject(row);
+
+      expect(obj['id']).toBe(largeId);
+      expect(typeof obj['id']).toBe('bigint');
+    });
+  });
+
+  describe('BigInt support', () => {
+    it('should handle BigInt values in GQLValue.int', () => {
+      const largeId = BigInt('115974477121658528');
+      const v = GQLValue.int(largeId);
+
+      expect(v.kind).toBe('INT');
+      expect(v.asInt).toBe(largeId);
+      expect(typeof v.toJS()).toBe('bigint');
+      expect(v.toJS()).toBe(largeId);
+    });
+
+    it('should convert safe integers to number in toJS', () => {
+      const safeInt = 42;
+      const v = GQLValue.int(safeInt);
+
+      expect(typeof v.toJS()).toBe('number');
+      expect(v.toJS()).toBe(42);
+    });
+
+    it('should handle BigInt at MAX_SAFE_INTEGER boundary', () => {
+      const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+      const beyondSafe = maxSafe + 1n;
+
+      const vSafe = GQLValue.int(maxSafe);
+      const vBeyond = GQLValue.int(beyondSafe);
+
+      // MAX_SAFE_INTEGER fits in number
+      expect(typeof vSafe.toJS()).toBe('number');
+      // MAX_SAFE_INTEGER + 1 requires bigint
+      expect(typeof vBeyond.toJS()).toBe('bigint');
+    });
+
+    it('should handle BigInt in fromJSON', () => {
+      const largeId = BigInt('115974477121658528');
+      const v = fromJSON(largeId);
+
+      expect(v.kind).toBe('INT');
+      expect(v.asInt).toBe(largeId);
+    });
+
+    it('should handle node with BigInt ID', () => {
+      const largeId = BigInt('115974477121658528');
+      const node = {
+        id: largeId,
+        labels: ['Person'],
+        properties: { name: 'Alice' },
+      };
+
+      const v = fromJSON(node);
+
+      expect(v.kind).toBe('NODE');
+      expect(v.asNode.id).toBe(largeId);
+    });
+
+    it('should handle edge with BigInt IDs', () => {
+      const edgeId = BigInt('115974480466781936');
+      const startId = BigInt('115974477121658528');
+      const endId = BigInt('115974478359077120');
+
+      const edge = {
+        id: edgeId,
+        type: 'KNOWS',
+        startNode: startId,
+        endNode: endId,
+        properties: {},
+      };
+
+      const v = fromJSON(edge);
+
+      expect(v.kind).toBe('EDGE');
+      expect(v.asEdge.id).toBe(edgeId);
+      expect(v.asEdge.startNode).toBe(startId);
+      expect(v.asEdge.endNode).toBe(endId);
+    });
+
+    it('should convert large string to BigInt with INT type hint', () => {
+      const largeIdStr = '115974477121658528';
+      const v = fromJSON(largeIdStr, 'INT');
+
+      expect(v.kind).toBe('INT');
+      expect(v.asInt).toBe(BigInt(largeIdStr));
+    });
+
+    it('should preserve BigInt through parseRow', () => {
+      const largeId = BigInt('115974477121658528');
+      const raw = { id: largeId };
+      const columns = [{ name: 'id', type: 'INT' as const, kind: 'INT' as const }];
+
+      const row = parseRow(raw, columns);
+
+      expect(row.get('id')?.asInt).toBe(largeId);
+    });
   });
 });
