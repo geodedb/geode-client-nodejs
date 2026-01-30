@@ -5,6 +5,12 @@
  */
 
 import type { QueryParams } from './connection.js';
+import {
+  validateLabel,
+  validateRelationshipType,
+  validatePropertyName,
+  validateVariableName,
+} from './validate.js';
 
 /**
  * Edge direction for pattern matching.
@@ -75,6 +81,7 @@ export class NodePatternBuilder {
    * Set the variable name.
    */
   as(variable: string): this {
+    validateVariableName(variable);
     this._variable = variable;
     return this;
   }
@@ -83,6 +90,7 @@ export class NodePatternBuilder {
    * Add a label.
    */
   label(label: string): this {
+    validateLabel(label);
     this._labels.push(label);
     return this;
   }
@@ -91,6 +99,9 @@ export class NodePatternBuilder {
    * Add multiple labels.
    */
   labels(...labels: string[]): this {
+    for (const l of labels) {
+      validateLabel(l);
+    }
     this._labels.push(...labels);
     return this;
   }
@@ -99,6 +110,7 @@ export class NodePatternBuilder {
    * Set a property.
    */
   prop(key: string, value: unknown): this {
+    validatePropertyName(key);
     this._properties[key] = value;
     return this;
   }
@@ -107,6 +119,9 @@ export class NodePatternBuilder {
    * Set multiple properties.
    */
   props(properties: Record<string, unknown>): this {
+    for (const key of Object.keys(properties)) {
+      validatePropertyName(key);
+    }
     Object.assign(this._properties, properties);
     return this;
   }
@@ -159,6 +174,7 @@ export class EdgePatternBuilder {
    * Set the variable name.
    */
   as(variable: string): this {
+    validateVariableName(variable);
     this._variable = variable;
     return this;
   }
@@ -167,6 +183,7 @@ export class EdgePatternBuilder {
    * Set the relationship type.
    */
   type(type: string): this {
+    validateRelationshipType(type);
     this._type = type;
     return this;
   }
@@ -207,6 +224,7 @@ export class EdgePatternBuilder {
    * Set a property.
    */
   prop(key: string, value: unknown): this {
+    validatePropertyName(key);
     this._properties[key] = value;
     return this;
   }
@@ -215,6 +233,9 @@ export class EdgePatternBuilder {
    * Set multiple properties.
    */
   props(properties: Record<string, unknown>): this {
+    for (const key of Object.keys(properties)) {
+      validatePropertyName(key);
+    }
     Object.assign(this._properties, properties);
     return this;
   }
@@ -478,6 +499,28 @@ export class PredicateBuilder {
 
   /**
    * Add a raw predicate expression.
+   *
+   * **⚠️ SECURITY WARNING: This method bypasses all input validation.**
+   *
+   * Using raw() with user-supplied input can lead to GQL injection attacks.
+   * Only use this method when:
+   * 1. The expression is entirely constructed from trusted, hardcoded strings
+   * 2. All dynamic values are passed via the `params` argument (using $paramName syntax)
+   *
+   * @example
+   * ```typescript
+   * // SAFE: Using parameters for dynamic values
+   * predicate().raw('n.custom_field CONTAINS $pattern', { pattern: userInput })
+   *
+   * // UNSAFE: Never interpolate user input directly
+   * predicate().raw(`n.name = '${userInput}'`) // VULNERABLE TO INJECTION!
+   * ```
+   *
+   * Consider using the typed predicate methods (eq, gt, contains, etc.) instead.
+   *
+   * @param expr - Raw predicate expression (MUST be trusted input)
+   * @param params - Parameters to bind (safe for user input)
+   * @deprecated Consider using typed predicate methods instead for better security.
    */
   raw(expr: string, params?: QueryParams): this {
     this._predicates.push(expr);
@@ -558,6 +601,26 @@ export class QueryBuilder {
 
   /**
    * Add a WHERE clause.
+   *
+   * **⚠️ SECURITY WARNING when using string predicates:**
+   *
+   * When passing a string predicate, this method does NOT validate or sanitize input.
+   * Using string predicates with user-supplied data can lead to GQL injection attacks.
+   *
+   * @example
+   * ```typescript
+   * // RECOMMENDED: Use PredicateBuilder for type-safe, injection-resistant queries
+   * query().where(predicate().eq('n.name', userInput))
+   *
+   * // SAFE: Using parameters with string predicates
+   * query().where('n.name = $name', { name: userInput })
+   *
+   * // UNSAFE: Never interpolate user input directly in string predicates
+   * query().where(`n.name = '${userInput}'`) // VULNERABLE TO INJECTION!
+   * ```
+   *
+   * @param predicate - A PredicateBuilder (recommended) or raw predicate string
+   * @param params - Parameters to bind when using string predicates
    */
   where(predicate: string | PredicateBuilder, params?: QueryParams): this {
     if (typeof predicate === 'string') {
@@ -678,7 +741,29 @@ export class QueryBuilder {
   }
 
   /**
-   * Add raw clause.
+   * Add a raw GQL clause.
+   *
+   * **⚠️ SECURITY WARNING: This method bypasses all input validation.**
+   *
+   * Using raw() with user-supplied input can lead to GQL injection attacks.
+   * Only use this method when:
+   * 1. The clause is entirely constructed from trusted, hardcoded strings
+   * 2. All dynamic values are passed via the `params` argument (using $paramName syntax)
+   *
+   * @example
+   * ```typescript
+   * // SAFE: Using parameters for dynamic values
+   * query().raw('CALL db.index.fulltext.queryNodes("idx", $term)', { term: userInput })
+   *
+   * // UNSAFE: Never interpolate user input directly
+   * query().raw(`MATCH (n:${userLabel})`) // VULNERABLE TO INJECTION!
+   * ```
+   *
+   * Consider using the typed query builder methods instead.
+   *
+   * @param clause - Raw GQL clause (MUST be trusted input)
+   * @param params - Parameters to bind (safe for user input)
+   * @deprecated Consider using typed query builder methods instead for better security.
    */
   raw(clause: string, params?: QueryParams): this {
     this._clauses.push(clause);
@@ -741,7 +826,9 @@ function valueToGQL(value: unknown): string {
     return 'null';
   }
   if (typeof value === 'string') {
-    return `'${value.replace(/'/g, "\\'")}'`;
+    // Escape backslashes first, then single quotes
+    // This prevents escape sequence injection where \' becomes \\' (escaped backslash + quote)
+    return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
   }
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value);
@@ -752,6 +839,8 @@ function valueToGQL(value: unknown): string {
   if (typeof value === 'object') {
     return propsToGQL(value as Record<string, unknown>);
   }
+  // At this point, value is a primitive (bigint, symbol, etc.) - safe to stringify
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string
   return String(value);
 }
 

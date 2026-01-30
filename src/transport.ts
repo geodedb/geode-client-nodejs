@@ -10,6 +10,7 @@ import * as crypto from 'node:crypto';
 import type { GeodeConfig } from './config.js';
 import { getAddress } from './config.js';
 import { TransportError, ErrClosed } from './errors.js';
+import { validateTLSCertPath } from './validate.js';
 
 // ALPN protocol for Geode
 const GEODE_ALPN = ['geode/1'];
@@ -47,6 +48,8 @@ export async function buildTLSConfig(cfg: GeodeConfig): Promise<tls.SecureContex
   if (cfg.tlsCACert) {
     options.ca = cfg.tlsCACert;
   } else if (cfg.tlsCA) {
+    // GAP #12: Validate path to prevent directory traversal attacks
+    validateTLSCertPath(cfg.tlsCA, 'tlsCA');
     try {
       options.ca = await fs.promises.readFile(cfg.tlsCA, 'utf-8');
     } catch (e) {
@@ -61,6 +64,8 @@ export async function buildTLSConfig(cfg: GeodeConfig): Promise<tls.SecureContex
   if (cfg.tlsCertPEM) {
     options.cert = cfg.tlsCertPEM;
   } else if (cfg.tlsCert) {
+    // GAP #12: Validate path to prevent directory traversal attacks
+    validateTLSCertPath(cfg.tlsCert, 'tlsCert');
     try {
       options.cert = await fs.promises.readFile(cfg.tlsCert, 'utf-8');
     } catch (e) {
@@ -75,6 +80,8 @@ export async function buildTLSConfig(cfg: GeodeConfig): Promise<tls.SecureContex
   if (cfg.tlsKeyPEM) {
     options.key = cfg.tlsKeyPEM;
   } else if (cfg.tlsKey) {
+    // GAP #12: Validate path to prevent directory traversal attacks
+    validateTLSCertPath(cfg.tlsKey, 'tlsKey');
     try {
       options.key = await fs.promises.readFile(cfg.tlsKey, 'utf-8');
     } catch (e) {
@@ -181,6 +188,26 @@ export class MatrixQuicTransport extends BaseTransport {
 
       // Configure TLS
       if (cfg.insecureSkipVerify) {
+        // Security safeguard: warn about insecure configuration
+        const isProduction =
+          process.env['NODE_ENV'] === 'production' || process.env['GEODE_ENV'] === 'production';
+        if (isProduction) {
+          // eslint-disable-next-line no-console -- Intentional security warning
+          console.warn(
+            'SECURITY WARNING: insecureSkipVerify is enabled in production environment. ' +
+              'This disables TLS certificate verification and exposes the connection to MITM attacks. ' +
+              'Set GEODE_ALLOW_INSECURE_PRODUCTION=true to override this warning.'
+          );
+          if (process.env['GEODE_ALLOW_INSECURE_PRODUCTION'] !== 'true') {
+            throw new TransportError({
+              operation: 'connect',
+              cause: new Error(
+                'insecureSkipVerify is not allowed in production. ' +
+                  'Configure proper TLS certificates or set GEODE_ALLOW_INSECURE_PRODUCTION=true to override.'
+              ),
+            });
+          }
+        }
         config.verifyPeer = false;
       }
       if (tlsConfig.ca) {
@@ -192,7 +219,7 @@ export class MatrixQuicTransport extends BaseTransport {
       }
 
       // Create QUIC client
-      /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/await-thenable */
+      /* eslint-disable @typescript-eslint/await-thenable */
       const client = await QUICClient.createQUICClient(
         {
           host,
@@ -209,7 +236,7 @@ export class MatrixQuicTransport extends BaseTransport {
       const connection = client.connection;
       const stream = await connection.newStream();
       transport._stream = stream;
-      /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/await-thenable */
+      /* eslint-enable @typescript-eslint/await-thenable */
 
       // Start reading from stream
       transport.startReading();
@@ -351,10 +378,32 @@ export class MatrixQuicTransport extends BaseTransport {
 
     // Wait for data
     return new Promise((resolve, reject) => {
-      const pendingRead = { resolve, reject };
+      // GAP #16: Track abort listener for cleanup
+      let onAbort: (() => void) | null = null;
+
+      const pendingRead = {
+        resolve: (value: Buffer) => {
+          // GAP #16: Clean up abort listener on successful resolution
+          if (onAbort && signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
+          resolve(value);
+        },
+        reject: (error: Error) => {
+          // GAP #16: Clean up abort listener on rejection
+          if (onAbort && signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
+          reject(error);
+        },
+      };
+
+      // GAP #16: Push to queue BEFORE registering abort listener to avoid race condition
+      // where abort fires before pendingRead is in the queue
+      this._pendingReads.push(pendingRead);
 
       if (signal) {
-        const onAbort = () => {
+        onAbort = () => {
           // CRITICAL: Remove this pending read from the queue before rejecting
           // to prevent data loss when the abort signal fires after data arrives
           const idx = this._pendingReads.indexOf(pendingRead);
@@ -365,8 +414,6 @@ export class MatrixQuicTransport extends BaseTransport {
         };
         signal.addEventListener('abort', onAbort, { once: true });
       }
-
-      this._pendingReads.push(pendingRead);
     });
   }
 
@@ -467,10 +514,31 @@ export class MockTransport extends BaseTransport {
     }
 
     return new Promise((resolve, reject) => {
-      const pendingRead = { resolve, reject };
+      // GAP #16: Track abort listener for cleanup
+      let onAbort: (() => void) | null = null;
+
+      const pendingRead = {
+        resolve: (value: Buffer) => {
+          // GAP #16: Clean up abort listener on successful resolution
+          if (onAbort && signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
+          resolve(value);
+        },
+        reject: (error: Error) => {
+          // GAP #16: Clean up abort listener on rejection
+          if (onAbort && signal) {
+            signal.removeEventListener('abort', onAbort);
+          }
+          reject(error);
+        },
+      };
+
+      // GAP #16: Push to queue BEFORE registering abort listener to avoid race condition
+      this._pendingReads.push(pendingRead);
 
       if (signal) {
-        const onAbort = () => {
+        onAbort = () => {
           // CRITICAL: Remove this pending read from the queue before rejecting
           // to prevent data loss when the abort signal fires after data arrives
           const idx = this._pendingReads.indexOf(pendingRead);
@@ -481,8 +549,6 @@ export class MockTransport extends BaseTransport {
         };
         signal.addEventListener('abort', onAbort, { once: true });
       }
-
-      this._pendingReads.push(pendingRead);
     });
   }
 

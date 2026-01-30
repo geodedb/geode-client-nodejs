@@ -351,4 +351,57 @@ describe('query-builder', () => {
       expect(params['threshold']).toBe(0.5);
     });
   });
+
+  // Security tests for valueToGQL string escaping
+  describe('valueToGQL string escaping (security)', () => {
+    it('should escape single quotes in property values', () => {
+      const n = node().label('Person').prop('name', "it's a test");
+      const result = n.toGQL();
+      expect(result).toContain("'it\\'s a test'");
+    });
+
+    it('should escape backslashes in property values', () => {
+      const n = node().label('Person').prop('path', 'C:\\Users\\test');
+      const result = n.toGQL();
+      // Backslash should be escaped to prevent escape sequence injection
+      expect(result).toContain("'C:\\\\Users\\\\test'");
+    });
+
+    it('should escape backslash before quote to prevent injection', () => {
+      // This is the critical security test
+      // Input: auth\'); DROP USER admin; //
+      // Without proper escaping, this becomes: 'auth\'); DROP USER admin; //'
+      // Which closes the string and injects GQL
+      const n = node().label('Test').prop('data', "auth\\'); DROP USER admin; //");
+      const result = n.toGQL();
+      // The backslash should be escaped, preventing the quote from closing the string
+      // Expected: 'auth\\'); DROP USER admin; //' where \\ is an escaped backslash
+      // and the following \' is an escaped quote, so the string stays open
+      expect(result).toContain("'auth\\\\\\'");
+      expect(result).not.toMatch(/'auth\\'\)/); // This would indicate injection
+    });
+
+    it('should handle double backslash correctly', () => {
+      const n = node().label('Test').prop('data', 'test\\\\end');
+      const result = n.toGQL();
+      // Each backslash should be escaped
+      expect(result).toContain("'test\\\\\\\\end'");
+    });
+
+    it('should handle complex escape sequences', () => {
+      // Multiple backslashes followed by quote
+      const n = node().label('Test').prop('data', "a\\\\'b");
+      const result = n.toGQL();
+      // Input: a\\'b (backslash, backslash, quote, b)
+      // Output should have each backslash escaped plus quote escaped
+      expect(result).toContain("'a\\\\\\\\\\'b'");
+    });
+
+    it('should safely handle array values with special characters', () => {
+      const n = node().label('Test').props({ items: ["a'b", "c\\d"] });
+      const result = n.toGQL();
+      expect(result).toContain("'a\\'b'");
+      expect(result).toContain("'c\\\\d'");
+    });
+  });
 });

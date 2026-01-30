@@ -14,6 +14,11 @@ import type { PreparedStatement } from './prepared.js';
 import type { QueryPlan, QueryProfile, ExplainOptions } from './explain.js';
 import type { BatchQuery, BatchSummary, BatchOptions } from './batch.js';
 import type { AuthClient } from './auth.js';
+import {
+  validateLabel,
+  validatePropertyName,
+  validateRelationshipType,
+} from './validate.js';
 
 /**
  * Client configuration options.
@@ -282,7 +287,20 @@ export class GeodeClient {
     labels: string | string[],
     properties?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    const labelStr = Array.isArray(labels) ? labels.join(':') : labels;
+    // Validate labels
+    const labelArray = Array.isArray(labels) ? labels : [labels];
+    for (const label of labelArray) {
+      validateLabel(label);
+    }
+    const labelStr = labelArray.join(':');
+
+    // Validate property keys if provided
+    if (properties) {
+      for (const key of Object.keys(properties)) {
+        validatePropertyName(key);
+      }
+    }
+
     const propsStr = properties ? ' $props' : '';
 
     const result = await this.queryFirst(
@@ -301,6 +319,16 @@ export class GeodeClient {
     filter?: Record<string, unknown>,
     options?: { limit?: number; skip?: number }
   ): Promise<Record<string, unknown>[]> {
+    // Validate label
+    validateLabel(label);
+
+    // Validate filter property keys
+    if (filter) {
+      for (const key of Object.keys(filter)) {
+        validatePropertyName(key);
+      }
+    }
+
     let query = `MATCH (n:${label})`;
 
     if (filter && Object.keys(filter).length > 0) {
@@ -331,6 +359,8 @@ export class GeodeClient {
     property: string,
     value: unknown
   ): Promise<Record<string, unknown> | null> {
+    // Validation happens in findNodes, but validate property here for better error messages
+    validatePropertyName(property);
     const rows = await this.findNodes(label, { [property]: value }, { limit: 1 });
     return rows[0] ?? null;
   }
@@ -348,6 +378,20 @@ export class GeodeClient {
     endValue: unknown,
     properties?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
+    // Validate all identifiers
+    validateLabel(startLabel);
+    validateLabel(endLabel);
+    validateRelationshipType(type);
+    validatePropertyName(startProp);
+    validatePropertyName(endProp);
+
+    // Validate property keys if provided
+    if (properties) {
+      for (const key of Object.keys(properties)) {
+        validatePropertyName(key);
+      }
+    }
+
     const propsStr = properties ? ' $props' : '';
 
     const result = await this.queryFirst(
@@ -371,6 +415,10 @@ export class GeodeClient {
    * Delete a node by label and property.
    */
   async deleteNode(label: string, property: string, value: unknown): Promise<number> {
+    // Validate identifiers
+    validateLabel(label);
+    validatePropertyName(property);
+
     const result = await this.queryFirst(
       `MATCH (n:${label}) WHERE n.${property} = $value DETACH DELETE n RETURN count(n) AS deleted`,
       { params: { value } }
@@ -387,6 +435,15 @@ export class GeodeClient {
     matchValue: unknown,
     updates: Record<string, unknown>
   ): Promise<Record<string, unknown> | null> {
+    // Validate identifiers
+    validateLabel(label);
+    validatePropertyName(matchProp);
+
+    // Validate update property keys
+    for (const key of Object.keys(updates)) {
+      validatePropertyName(key);
+    }
+
     const setStatements = Object.keys(updates)
       .map((k) => `n.${k} = $${k}`)
       .join(', ');
@@ -403,6 +460,16 @@ export class GeodeClient {
    * Count nodes by label.
    */
   async countNodes(label: string, filter?: Record<string, unknown>): Promise<number> {
+    // Validate label
+    validateLabel(label);
+
+    // Validate filter property keys
+    if (filter) {
+      for (const key of Object.keys(filter)) {
+        validatePropertyName(key);
+      }
+    }
+
     let query = `MATCH (n:${label})`;
 
     if (filter && Object.keys(filter).length > 0) {

@@ -11,12 +11,29 @@ useDefault = true
 description = "Global allowlist"
 paths = [
   '''testdata''',
-  '''tests/.*''',
+  '''tests/fixtures''',
   '''node_modules''',
   '''dist''',
   '''coverage''',
-  '''.*\.ts$''',
-  '''.*\.js$''',
-  '''.*\.md$''',
   '''.*\.log$''',
+  '''package-lock\.json$''',
+]
+
+# Rule-specific allowlists for known false positives
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key - false positive for test fixtures"
+[rules.allowlist]
+paths = [
+  '''tests/.*\.test\.ts$''',
+  '''tests/fixtures/.*''',
+]
+
+[[rules]]
+id = "private-key"
+description = "Private Key - false positive for test certificates"
+[rules.allowlist]
+paths = [
+  '''tests/fixtures/.*\.pem$''',
+  '''testdata/.*\.pem$''',
 ]

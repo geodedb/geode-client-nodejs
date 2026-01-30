@@ -8,6 +8,9 @@ import {
   validatePageSize,
   validateSavepointName,
   sanitizeForLog,
+  validateRLSPredicate,
+  validateTLSCertPath,
+  escapeGQLIdentifier,
 } from '../../src/validate.js';
 import { SecurityError } from '../../src/errors.js';
 
@@ -269,6 +272,384 @@ describe('validate', () => {
       const input = 'host=localhost port=3141 user=admin';
       const result = sanitizeForLog(input);
       expect(result).toBe(input);
+    });
+  });
+
+  describe('validateRLSPredicate', () => {
+    // GAP #11 - GQL Predicate Injection Prevention Tests
+
+    describe('valid predicates', () => {
+      it('should accept simple property comparisons', () => {
+        expect(() => validateRLSPredicate('n.owner = current_user()')).not.toThrow();
+        expect(() => validateRLSPredicate('n.visible = true')).not.toThrow();
+        expect(() => validateRLSPredicate('n.age > 21')).not.toThrow();
+      });
+
+      it('should accept boolean operators', () => {
+        expect(() => validateRLSPredicate('n.public = true OR n.owner = $user')).not.toThrow();
+        expect(() => validateRLSPredicate('n.active AND n.approved')).not.toThrow();
+        expect(() => validateRLSPredicate('NOT n.deleted')).not.toThrow();
+      });
+
+      it('should accept predicates with parameters', () => {
+        expect(() => validateRLSPredicate('n.team = $teamId')).not.toThrow();
+        expect(() => validateRLSPredicate('n.owner IN $allowedUsers')).not.toThrow();
+      });
+
+      it('should accept predicates with function calls', () => {
+        expect(() => validateRLSPredicate('exists((n)-[:MEMBER]->(:Team))')).not.toThrow();
+        expect(() => validateRLSPredicate('size(n.tags) > 0')).not.toThrow();
+      });
+
+      it('should accept predicates with string literals', () => {
+        expect(() => validateRLSPredicate("n.status = 'active'")).not.toThrow();
+        expect(() => validateRLSPredicate('n.type = "public"')).not.toThrow();
+      });
+
+      it('should accept nested pattern predicates', () => {
+        expect(() =>
+          validateRLSPredicate('exists((n)-[:OWNS]->(:Resource {id: $resourceId}))')
+        ).not.toThrow();
+      });
+    });
+
+    describe('injection attack prevention', () => {
+      it('should reject predicates with semicolons (statement injection)', () => {
+        expect(() => validateRLSPredicate('true; DROP POLICY admin')).toThrow(SecurityError);
+        expect(() =>
+          validateRLSPredicate('n.x = 1; CREATE (m:Malicious)')
+        ).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with DDL keywords', () => {
+        expect(() =>
+          validateRLSPredicate('n.x = 1 CREATE (m:Malicious)')
+        ).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('true DROP POLICY x')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('n.x DELETE n')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('n.y SET n.admin = true')).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with MERGE keyword', () => {
+        expect(() =>
+          validateRLSPredicate('n.x MERGE (m:Admin {name: "attacker"})')
+        ).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with policy manipulation keywords', () => {
+        expect(() => validateRLSPredicate('true GRANT READ TO attacker')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('true REVOKE ALL FROM admin')).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with comment injection', () => {
+        expect(() => validateRLSPredicate('true /* comment */ false')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('true -- comment')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('true // comment')).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with line breaks', () => {
+        expect(() => validateRLSPredicate('true\nDROP POLICY x')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('true\rCREATE (n:Evil)')).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with backticks', () => {
+        expect(() => validateRLSPredicate('`true`')).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with unbalanced brackets', () => {
+        expect(() => validateRLSPredicate('(n.x = 1')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('n.x = 1)')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('[a, b, c')).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('{a: 1')).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with unclosed strings', () => {
+        expect(() => validateRLSPredicate("n.x = 'unclosed")).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('n.x = "unclosed')).toThrow(SecurityError);
+      });
+
+      it('should reject empty predicates', () => {
+        expect(() => validateRLSPredicate('')).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with CALL keyword', () => {
+        expect(() =>
+          validateRLSPredicate('true CALL db.dropDatabase()')
+        ).toThrow(SecurityError);
+      });
+
+      it('should reject predicates with LOAD keyword', () => {
+        expect(() =>
+          validateRLSPredicate('true LOAD CSV FROM "http://evil.com"')
+        ).toThrow(SecurityError);
+      });
+    });
+
+    describe('documented attack example', () => {
+      it('should reject the attack from GAP_ANALYSIS.md', () => {
+        const maliciousPredicate =
+          'true) USING (true); DROP POLICY admin_policy ON :User; CREATE POLICY x ON :y FOR READ USING (true';
+        expect(() => validateRLSPredicate(maliciousPredicate)).toThrow(SecurityError);
+      });
+    });
+
+    // GAP #18 - Escaped Backslash Bypass Prevention Tests
+    describe('escaped backslash handling', () => {
+      it('should correctly parse string with escaped quote', () => {
+        // Single escaped quote - still in string
+        expect(() => validateRLSPredicate("n.name = 'it\\'s ok'")).not.toThrow();
+        expect(() => validateRLSPredicate('n.name = "he said \\"hello\\""')).not.toThrow();
+      });
+
+      it('should correctly parse string ending with escaped backslash', () => {
+        // Escaped backslash followed by quote - string ends
+        // 'path\\' means: path + backslash (escaped) + end quote
+        expect(() => validateRLSPredicate("n.path = 'C:\\\\' AND n.valid = true")).not.toThrow();
+      });
+
+      it('should correctly parse double escaped backslash followed by escaped quote', () => {
+        // '\\\'  means: escaped backslash + escaped quote = still in string
+        // This tests the edge case where \\\' should keep us in the string
+        expect(() => validateRLSPredicate("n.data = '\\\\\\'' AND n.x = 1")).not.toThrow();
+      });
+
+      it('should reject escaped backslash bypass attempt (even backslashes)', () => {
+        // Attack: use \\\\ (2 escaped backslashes = 4 chars) followed by quote
+        // Parser should see: string ends, then injection
+        // The ' after \\\\ should end the string, making DROP visible
+        const attack = "n.x = 'test\\\\' DROP POLICY x";
+        expect(() => validateRLSPredicate(attack)).toThrow(SecurityError);
+      });
+
+      it('should handle multiple escaped backslashes correctly', () => {
+        // 4 backslashes = 2 escaped backslashes, quote ends string
+        expect(() => validateRLSPredicate("n.path = '\\\\\\\\' AND n.valid")).not.toThrow();
+        // 6 backslashes = 3 escaped backslashes, quote ends string
+        expect(() => validateRLSPredicate("n.path = '\\\\\\\\\\\\' AND n.valid")).not.toThrow();
+      });
+
+      it('should correctly identify unclosed string with odd backslashes', () => {
+        // Odd number of backslashes before quote = escaped quote = still in string
+        // This should be detected as unclosed string
+        expect(() => validateRLSPredicate("n.x = 'test\\'")).toThrow(SecurityError);
+        expect(() => validateRLSPredicate("n.x = 'test\\\\\\'")).toThrow(SecurityError);
+      });
+
+      it('should handle complex escape sequences in valid predicates', () => {
+        // Valid predicate with mixed escapes
+        expect(() =>
+          validateRLSPredicate("n.regex = '\\\\d+' AND n.path = 'C:\\\\Users\\\\' AND n.active")
+        ).not.toThrow();
+      });
+    });
+  });
+
+  describe('validateTLSCertPath', () => {
+    // GAP #12 - Path Traversal Prevention Tests
+
+    describe('valid paths', () => {
+      it('should accept absolute paths to certificate directories', () => {
+        expect(() => validateTLSCertPath('/etc/ssl/certs/ca.pem', 'tlsCA')).not.toThrow();
+        expect(() => validateTLSCertPath('/etc/pki/tls/certs/server.crt', 'tlsCert')).not.toThrow();
+        expect(() =>
+          validateTLSCertPath('/usr/local/share/ca-certificates/custom.crt', 'tlsCA')
+        ).not.toThrow();
+      });
+
+      it('should accept relative paths without traversal', () => {
+        expect(() => validateTLSCertPath('./certs/ca.pem', 'tlsCA')).not.toThrow();
+        expect(() => validateTLSCertPath('certs/server.crt', 'tlsCert')).not.toThrow();
+        expect(() => validateTLSCertPath('server.key', 'tlsKey')).not.toThrow();
+      });
+
+      it('should accept home directory paths', () => {
+        expect(() => validateTLSCertPath('/home/user/.ssl/cert.pem', 'tlsCert')).not.toThrow();
+      });
+    });
+
+    describe('path traversal prevention', () => {
+      it('should reject paths with directory traversal (../)', () => {
+        expect(() => validateTLSCertPath('../../../etc/passwd', 'tlsCA')).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('/etc/ssl/../passwd', 'tlsCA')).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('certs/../../etc/shadow', 'tlsCert')).toThrow(SecurityError);
+      });
+
+      it('should reject paths ending with /..', () => {
+        expect(() => validateTLSCertPath('/etc/ssl/..', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject encoded traversal sequences', () => {
+        expect(() => validateTLSCertPath('%2e%2e%2fetc/passwd', 'tlsCA')).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('%252e%252e/etc/passwd', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths with null bytes', () => {
+        expect(() => validateTLSCertPath('/etc/ssl/cert.pem\0.txt', 'tlsCA')).toThrow(SecurityError);
+      });
+    });
+
+    describe('restricted system file prevention', () => {
+      it('should reject paths to /etc/passwd', () => {
+        expect(() => validateTLSCertPath('/etc/passwd', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths to /etc/shadow', () => {
+        expect(() => validateTLSCertPath('/etc/shadow', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths to /proc/', () => {
+        expect(() => validateTLSCertPath('/proc/self/environ', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths to /sys/', () => {
+        expect(() => validateTLSCertPath('/sys/kernel/config', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths to /dev/', () => {
+        expect(() => validateTLSCertPath('/dev/urandom', 'tlsCA')).toThrow(SecurityError);
+      });
+    });
+
+    describe('documented attack examples', () => {
+      it('should reject attack from GAP_ANALYSIS.md: /etc/passwd', () => {
+        expect(() => validateTLSCertPath('/etc/passwd', 'ca')).toThrow(SecurityError);
+      });
+
+      it('should reject attack from GAP_ANALYSIS.md: ../../../etc/shadow', () => {
+        expect(() =>
+          validateTLSCertPath('../../../etc/shadow', 'cert')
+        ).toThrow(SecurityError);
+      });
+    });
+
+    describe('edge cases', () => {
+      it('should reject empty paths', () => {
+        expect(() => validateTLSCertPath('', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should handle Windows-style paths', () => {
+        // Should normalize backslashes and detect traversal
+        expect(() => validateTLSCertPath('..\\..\\etc\\passwd', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should handle duplicate slashes', () => {
+        // Should normalize but still detect issues
+        expect(() => validateTLSCertPath('/etc//passwd', 'tlsCA')).toThrow(SecurityError);
+      });
+    });
+
+    // GAP #21: Expanded sensitive path blocklist tests
+    describe('expanded sensitive path blocklist', () => {
+      it('should reject paths to /root/', () => {
+        expect(() => validateTLSCertPath('/root/.bashrc', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths to SSH directories', () => {
+        expect(() => validateTLSCertPath('/home/user/.ssh/id_rsa', 'tlsCA')).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('/root/.ssh/authorized_keys', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths to Kubernetes secrets', () => {
+        expect(() =>
+          validateTLSCertPath('/var/run/secrets/kubernetes.io/serviceaccount/token', 'tlsCA')
+        ).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('/run/secrets/mysecret', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths to AWS credentials', () => {
+        expect(() => validateTLSCertPath('/home/user/.aws/credentials', 'tlsCA')).toThrow(
+          SecurityError
+        );
+        expect(() => validateTLSCertPath('/root/.aws/config', 'tlsCA')).toThrow(SecurityError);
+      });
+
+      it('should reject paths to GCP credentials', () => {
+        expect(() =>
+          validateTLSCertPath('/home/user/.config/gcloud/application_default_credentials.json', 'tlsCA')
+        ).toThrow(SecurityError);
+      });
+
+      it('should reject paths to Azure credentials', () => {
+        expect(() => validateTLSCertPath('/home/user/.azure/azureProfile.json', 'tlsCA')).toThrow(
+          SecurityError
+        );
+      });
+
+      it('should reject paths to .env files', () => {
+        expect(() => validateTLSCertPath('/app/.env', 'tlsCA')).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('/var/www/app/.env.production', 'tlsCA')).toThrow(
+          SecurityError
+        );
+      });
+    });
+
+    // GAP #20: Symlink TOCTOU prevention tests
+    // Note: These tests verify the symlink detection code path exists
+    // Actual symlink testing requires creating real symlinks which is environment-specific
+    describe('symlink handling', () => {
+      it('should handle non-existent paths gracefully (validation still performed)', () => {
+        // Non-existent path should pass string validation (file existence is checked later)
+        expect(() => validateTLSCertPath('/nonexistent/path/to/cert.pem', 'tlsCA')).not.toThrow();
+      });
+
+      it('should reject path even if symlink target validation would fail', () => {
+        // If we had a symlink /tmp/link -> /etc/passwd, the resolved path should be blocked
+        // This tests that the blocklist check works for resolved paths
+        // We can't create real symlinks in tests, but we test the blocklist includes SSH paths
+        expect(() => validateTLSCertPath('/something/.ssh/key', 'tlsCA')).toThrow(SecurityError);
+      });
+    });
+  });
+
+  describe('escapeGQLIdentifier', () => {
+    // GAP #14 - GQL Identifier Escape Function Tests
+
+    describe('valid identifiers', () => {
+      it('should return simple identifiers as-is', () => {
+        expect(escapeGQLIdentifier('Person', 'label')).toBe('Person');
+        expect(escapeGQLIdentifier('user_name', 'label')).toBe('user_name');
+        expect(escapeGQLIdentifier('_private', 'label')).toBe('_private');
+        expect(escapeGQLIdentifier('MyLabel123', 'label')).toBe('MyLabel123');
+      });
+
+      it('should work with different identifier types', () => {
+        expect(escapeGQLIdentifier('KNOWS', 'relationship_type')).toBe('KNOWS');
+        expect(escapeGQLIdentifier('age', 'property')).toBe('age');
+        expect(escapeGQLIdentifier('n', 'variable')).toBe('n');
+      });
+    });
+
+    describe('validation', () => {
+      it('should throw for empty identifiers', () => {
+        expect(() => escapeGQLIdentifier('', 'label')).toThrow(SecurityError);
+      });
+
+      it('should throw for identifiers starting with digit', () => {
+        expect(() => escapeGQLIdentifier('123label', 'label')).toThrow(SecurityError);
+      });
+
+      it('should throw for identifiers with special characters', () => {
+        expect(() => escapeGQLIdentifier('my-label', 'label')).toThrow(SecurityError);
+        expect(() => escapeGQLIdentifier('my.label', 'label')).toThrow(SecurityError);
+        expect(() => escapeGQLIdentifier('my label', 'label')).toThrow(SecurityError);
+      });
+
+      it('should throw for identifiers exceeding max length', () => {
+        const longLabel = 'a'.repeat(200);
+        expect(() => escapeGQLIdentifier(longLabel, 'label')).toThrow(SecurityError);
+      });
+    });
+
+    describe('defense in depth', () => {
+      it('should provide safe output even for valid identifiers', () => {
+        // The function validates first, so any output is safe
+        const result = escapeGQLIdentifier('ValidLabel', 'label');
+        expect(result).toBe('ValidLabel');
+        // Result should not contain injection characters
+        expect(result).not.toContain(';');
+        expect(result).not.toContain('--');
+        expect(result).not.toContain('/*');
+      });
     });
   });
 });

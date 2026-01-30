@@ -209,6 +209,26 @@ describe('config', () => {
         expect(() => parseDSN('myserver:3141?cert=/path/cert')).toThrow(ConfigError);
         expect(() => parseDSN('myserver:3141?key=/path/key')).toThrow(ConfigError);
       });
+
+      // Port range validation tests
+      it('should reject invalid port in simple DSN', () => {
+        expect(() => parseDSN('myserver:abc')).toThrow(ConfigError);
+        expect(() => parseDSN('myserver:99999')).toThrow(ConfigError);
+        expect(() => parseDSN('myserver:0')).toThrow(ConfigError);
+        expect(() => parseDSN('myserver:-1')).toThrow(ConfigError);
+      });
+
+      it('should reject invalid port in geode:// URL', () => {
+        // Note: URL constructor rejects 99999 and -1 as invalid URLs,
+        // so only port 0 can be tested here (accepted by URL but invalid port range)
+        expect(() => parseDSN('geode://myserver:0')).toThrow(ConfigError);
+      });
+
+      it('should reject invalid port in IPv6 address', () => {
+        expect(() => parseDSN('[::1]:99999')).toThrow(ConfigError);
+        expect(() => parseDSN('[::1]:0')).toThrow(ConfigError);
+        expect(() => parseDSN('geode://[::1]:99999')).toThrow(ConfigError);
+      });
     });
   });
 
@@ -232,6 +252,41 @@ describe('config', () => {
 
       cfg.port = 70000;
       expect(() => validateConfig(cfg)).toThrow(ConfigError);
+    });
+
+    it('should reject port outside valid range (1-65535)', () => {
+      const cfg = defaultConfig();
+
+      // Test negative port
+      cfg.port = -1;
+      expect(() => validateConfig(cfg)).toThrow(ConfigError);
+
+      // Test port above max
+      cfg.port = 65536;
+      expect(() => validateConfig(cfg)).toThrow(ConfigError);
+
+      // Test very large port number
+      cfg.port = 99999;
+      expect(() => validateConfig(cfg)).toThrow(ConfigError);
+    });
+
+    it('should accept valid port boundaries', () => {
+      const cfg = defaultConfig();
+
+      // Test minimum valid port
+      cfg.port = 1;
+      expect(() => validateConfig(cfg)).not.toThrow();
+
+      // Test maximum valid port
+      cfg.port = 65535;
+      expect(() => validateConfig(cfg)).not.toThrow();
+
+      // Test common ports
+      cfg.port = 3141;
+      expect(() => validateConfig(cfg)).not.toThrow();
+
+      cfg.port = 443;
+      expect(() => validateConfig(cfg)).not.toThrow();
     });
 
     it('should reject invalid pageSize', () => {

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { MockTransport } from '../../src/transport.js';
-import { TransportError } from '../../src/errors.js';
+import { MockTransport, buildTLSConfig } from '../../src/transport.js';
+import { TransportError, SecurityError } from '../../src/errors.js';
+import type { GeodeConfig } from '../../src/config.js';
 
 describe('MockTransport', () => {
   let transport: MockTransport;
@@ -194,6 +195,92 @@ describe('MockTransport', () => {
   describe('getAddress', () => {
     it('should return the mock address', () => {
       expect(transport.getAddress()).toBe('mock:3141');
+    });
+  });
+});
+
+describe('buildTLSConfig', () => {
+  // GAP #12 - Path Traversal Prevention in TLS Certificate Configuration
+
+  const baseConfig: GeodeConfig = {
+    host: 'localhost',
+    port: 3141,
+    pageSize: 1000,
+    helloName: 'test',
+    helloVersion: '1.0.0',
+    conformance: 'min',
+  };
+
+  describe('path traversal prevention', () => {
+    it('should reject tlsCA with path traversal', async () => {
+      const config: GeodeConfig = {
+        ...baseConfig,
+        tlsCA: '../../../etc/passwd',
+      };
+      await expect(buildTLSConfig(config)).rejects.toThrow(SecurityError);
+    });
+
+    it('should reject tlsCert with path traversal', async () => {
+      const config: GeodeConfig = {
+        ...baseConfig,
+        tlsCert: '/etc/ssl/../../../etc/shadow',
+        tlsKey: '/etc/ssl/private/server.key',
+      };
+      await expect(buildTLSConfig(config)).rejects.toThrow(SecurityError);
+    });
+
+    it('should reject tlsKey with path traversal', async () => {
+      const config: GeodeConfig = {
+        ...baseConfig,
+        // Use PEM string for cert so we can test key path validation
+        tlsCertPEM: '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----',
+        tlsKey: '../../../etc/shadow',
+      };
+      await expect(buildTLSConfig(config)).rejects.toThrow(SecurityError);
+    });
+
+    it('should reject restricted system file paths', async () => {
+      const config: GeodeConfig = {
+        ...baseConfig,
+        tlsCA: '/etc/passwd',
+      };
+      await expect(buildTLSConfig(config)).rejects.toThrow(SecurityError);
+    });
+
+    it('should reject paths with encoded traversal', async () => {
+      const config: GeodeConfig = {
+        ...baseConfig,
+        tlsCA: '%2e%2e%2fetc/passwd',
+      };
+      await expect(buildTLSConfig(config)).rejects.toThrow(SecurityError);
+    });
+  });
+
+  describe('valid paths', () => {
+    it('should accept PEM strings directly', async () => {
+      const config: GeodeConfig = {
+        ...baseConfig,
+        tlsCACert: '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----',
+      };
+      const result = await buildTLSConfig(config);
+      expect(result.ca).toContain('BEGIN CERTIFICATE');
+    });
+
+    it('should accept PEM strings for cert and key', async () => {
+      const config: GeodeConfig = {
+        ...baseConfig,
+        tlsCertPEM: '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----',
+        tlsKeyPEM: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----',
+      };
+      const result = await buildTLSConfig(config);
+      expect(result.cert).toContain('BEGIN CERTIFICATE');
+      expect(result.key).toContain('BEGIN PRIVATE KEY');
+    });
+
+    it('should set TLS 1.3 as minimum version', async () => {
+      const result = await buildTLSConfig(baseConfig);
+      expect(result.minVersion).toBe('TLSv1.3');
+      expect(result.maxVersion).toBe('TLSv1.3');
     });
   });
 });

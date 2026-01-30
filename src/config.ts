@@ -14,6 +14,15 @@ export const DEFAULT_HELLO_VERSION = '1.0.0';
 export const DEFAULT_CONFORMANCE = 'min';
 export const MAX_QUERY_LENGTH = 1 << 20; // 1MB
 export const MAX_PAGE_SIZE = 100000;
+export const MIN_PORT = 1;
+export const MAX_PORT = 65535;
+
+/**
+ * Validate that a port number is within valid TCP/UDP range.
+ */
+function isValidPort(port: number): boolean {
+  return !isNaN(port) && port >= MIN_PORT && port <= MAX_PORT;
+}
 
 /**
  * Geode connection configuration.
@@ -159,7 +168,7 @@ export function parseDSN(dsn: string): GeodeConfig {
   }
   if (process.env['GEODE_PORT']) {
     const port = parseInt(process.env['GEODE_PORT'], 10);
-    if (!isNaN(port)) {
+    if (isValidPort(port)) {
       cfg.port = port;
     }
   }
@@ -212,7 +221,15 @@ function parseURLDSN(dsn: string, cfg: GeodeConfig): GeodeConfig {
   cfg.host = url.hostname;
 
   if (url.port) {
-    cfg.port = parseInt(url.port, 10);
+    const port = parseInt(url.port, 10);
+    if (!isValidPort(port)) {
+      throw new ConfigError({
+        field: 'port',
+        value: url.port,
+        message: `must be a valid port number (${MIN_PORT}-${MAX_PORT})`,
+      });
+    }
+    cfg.port = port;
   }
 
   // Parse credentials from URL
@@ -275,11 +292,11 @@ function parseHostPort(addr: string): { host: string; port: number } {
     const rest = addr.slice(closeBracket + 1);
     if (rest.startsWith(':')) {
       const port = parseInt(rest.slice(1), 10);
-      if (isNaN(port)) {
+      if (!isValidPort(port)) {
         throw new ConfigError({
           field: 'port',
           value: rest.slice(1),
-          message: 'must be a valid port number',
+          message: `must be a valid port number (${MIN_PORT}-${MAX_PORT})`,
         });
       }
       return { host, port };
@@ -303,11 +320,11 @@ function parseHostPort(addr: string): { host: string; port: number } {
   const portStr = addr.slice(lastColon + 1);
   const port = parseInt(portStr, 10);
 
-  if (isNaN(port)) {
+  if (!isValidPort(port)) {
     throw new ConfigError({
       field: 'port',
       value: portStr,
-      message: 'must be a valid port number',
+      message: `must be a valid port number (${MIN_PORT}-${MAX_PORT})`,
     });
   }
 
@@ -422,7 +439,7 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
   }
 
   // Validate mTLS configuration - XOR: one but not both
-  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+   
   if ((cfg.tlsCert && !cfg.tlsKey) || (!cfg.tlsCert && cfg.tlsKey)) {
     throw new ConfigError({
       field: 'tls',
@@ -483,4 +500,81 @@ export function getAddress(cfg: GeodeConfig): string {
  */
 export function cloneConfig(cfg: GeodeConfig): GeodeConfig {
   return { ...cfg };
+}
+
+/**
+ * Redact credentials from a DSN string for safe logging.
+ *
+ * Replaces username and password with '***' to prevent credential exposure
+ * in logs, error messages, or other output.
+ *
+ * @example
+ * ```typescript
+ * redactDSN('geode://admin:secret@localhost:3141')
+ * // Returns: 'geode://***:***@localhost:3141'
+ *
+ * redactDSN('localhost:3141?username=admin&password=secret')
+ * // Returns: 'localhost:3141?username=***&password=***'
+ * ```
+ */
+export function redactDSN(dsn: string): string {
+  if (!dsn) {
+    return dsn;
+  }
+
+  // Handle geode:// URL format
+  if (dsn.startsWith('geode://')) {
+    try {
+      const url = new URL(dsn);
+
+      // Redact username and password in URL
+      if (url.username) {
+        url.username = '***';
+      }
+      if (url.password) {
+        url.password = '***';
+      }
+
+      // Redact password/pass query params
+      if (url.searchParams.has('password')) {
+        url.searchParams.set('password', '***');
+      }
+      if (url.searchParams.has('pass')) {
+        url.searchParams.set('pass', '***');
+      }
+      if (url.searchParams.has('username')) {
+        url.searchParams.set('username', '***');
+      }
+      if (url.searchParams.has('user')) {
+        url.searchParams.set('user', '***');
+      }
+
+      return url.toString();
+    } catch {
+      // If URL parsing fails, fall through to string-based redaction
+    }
+  }
+
+  // String-based redaction for simple DSN format
+  let result = dsn;
+
+  // Redact password in query params
+  result = result.replace(/(password|pass)=([^&]*)/gi, '$1=***');
+
+  // Redact username in query params
+  result = result.replace(/(username|user)=([^&]*)/gi, '$1=***');
+
+  return result;
+}
+
+/**
+ * Redact credentials from a configuration object for safe logging.
+ *
+ * Returns a new config object with password set to '***'.
+ */
+export function redactConfig(cfg: GeodeConfig): GeodeConfig {
+  return {
+    ...cfg,
+    password: cfg.password ? '***' : undefined,
+  };
 }

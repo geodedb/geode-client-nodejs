@@ -22,6 +22,105 @@ interface PooledConnection {
 }
 
 /**
+ * Rate limiter configuration.
+ */
+export interface RateLimiterConfig {
+  /** Maximum number of connection attempts per window (default: 10) */
+  maxAttempts: number;
+  /** Time window in milliseconds (default: 1000) */
+  windowMs: number;
+  /** Initial backoff delay in milliseconds (default: 100) */
+  initialBackoffMs: number;
+  /** Maximum backoff delay in milliseconds (default: 30000) */
+  maxBackoffMs: number;
+  /** Backoff multiplier (default: 2) */
+  backoffMultiplier: number;
+}
+
+/**
+ * Default rate limiter configuration.
+ */
+const DEFAULT_RATE_LIMITER_CONFIG: RateLimiterConfig = {
+  maxAttempts: 10,
+  windowMs: 1000,
+  initialBackoffMs: 100,
+  maxBackoffMs: 30000,
+  backoffMultiplier: 2,
+};
+
+/**
+ * Simple sliding window rate limiter.
+ */
+class RateLimiter {
+  private _config: RateLimiterConfig;
+  private _attempts: number[] = [];
+  private _consecutiveFailures = 0;
+
+  constructor(config: Partial<RateLimiterConfig> = {}) {
+    this._config = { ...DEFAULT_RATE_LIMITER_CONFIG, ...config };
+  }
+
+  /**
+   * Check if a new attempt is allowed.
+   */
+  isAllowed(): boolean {
+    const now = Date.now();
+    const windowStart = now - this._config.windowMs;
+
+    // Remove old attempts outside the window
+    this._attempts = this._attempts.filter((t) => t > windowStart);
+
+    return this._attempts.length < this._config.maxAttempts;
+  }
+
+  /**
+   * Record an attempt.
+   */
+  recordAttempt(): void {
+    this._attempts.push(Date.now());
+  }
+
+  /**
+   * Record a successful connection (resets backoff).
+   */
+  recordSuccess(): void {
+    this._consecutiveFailures = 0;
+  }
+
+  /**
+   * Record a failed connection attempt.
+   */
+  recordFailure(): void {
+    this._consecutiveFailures++;
+  }
+
+  /**
+   * Get the current backoff delay based on consecutive failures.
+   */
+  getBackoffDelay(): number {
+    if (this._consecutiveFailures === 0) {
+      return 0;
+    }
+
+    const delay =
+      this._config.initialBackoffMs *
+      Math.pow(this._config.backoffMultiplier, this._consecutiveFailures - 1);
+
+    return Math.min(delay, this._config.maxBackoffMs);
+  }
+
+  /**
+   * Wait for the backoff period.
+   */
+  async waitForBackoff(): Promise<void> {
+    const delay = this.getBackoffDelay();
+    if (delay > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+/**
  * Connection pool for managing multiple connections.
  */
 export class ConnectionPool {
@@ -34,6 +133,7 @@ export class ConnectionPool {
   }> = [];
   private _closed = false;
   private _maintenanceInterval?: NodeJS.Timeout;
+  private _rateLimiter: RateLimiter;
 
   // Pool configuration with defaults
   private _minConnections: number;
@@ -41,12 +141,13 @@ export class ConnectionPool {
   private _acquireTimeout: number;
   private _idleTimeout: number;
 
-  constructor(config: PoolConfig) {
+  constructor(config: PoolConfig, rateLimiterConfig?: Partial<RateLimiterConfig>) {
     this._config = config;
     this._minConnections = config.minConnections ?? 2;
     this._maxConnections = config.maxConnections ?? 10;
     this._acquireTimeout = config.acquireTimeout ?? 30000;
     this._idleTimeout = config.idleTimeout ?? 60000;
+    this._rateLimiter = new RateLimiter(rateLimiterConfig);
 
     // Start maintenance interval
     this._maintenanceInterval = setInterval(() => {
@@ -303,16 +404,36 @@ export class ConnectionPool {
   }
 
   /**
-   * Add a new connection to the pool.
+   * Add a new connection to the pool with rate limiting and exponential backoff.
    */
   private async addConnection(): Promise<void> {
-    const conn = await Connection.connect(this._config);
-    this._connections.push({
-      connection: conn,
-      createdAt: Date.now(),
-      lastUsedAt: Date.now(),
-      inUse: false,
-    });
+    // Check rate limit
+    if (!this._rateLimiter.isAllowed()) {
+      throw new TransportError({
+        operation: 'connect',
+        cause: new Error('Connection rate limit exceeded'),
+      });
+    }
+
+    // Wait for backoff if there were previous failures
+    await this._rateLimiter.waitForBackoff();
+
+    // Record the attempt
+    this._rateLimiter.recordAttempt();
+
+    try {
+      const conn = await Connection.connect(this._config);
+      this._rateLimiter.recordSuccess();
+      this._connections.push({
+        connection: conn,
+        createdAt: Date.now(),
+        lastUsedAt: Date.now(),
+        inUse: false,
+      });
+    } catch (e) {
+      this._rateLimiter.recordFailure();
+      throw e;
+    }
   }
 
   /**

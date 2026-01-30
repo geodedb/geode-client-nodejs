@@ -5,6 +5,7 @@ import {
   fromJSON,
   parseRow,
   rowToObject,
+  isSafeObjectKey,
   type GQLValueKind,
 } from '../../src/types.js';
 
@@ -405,6 +406,89 @@ describe('types', () => {
 
       expect(obj['id']).toBe(largeId);
       expect(typeof obj['id']).toBe('bigint');
+    });
+
+    // GAP #17: Prototype pollution protection tests
+    describe('prototype pollution protection', () => {
+      describe('isSafeObjectKey', () => {
+        it('should return false for __proto__', () => {
+          expect(isSafeObjectKey('__proto__')).toBe(false);
+        });
+
+        it('should return false for constructor', () => {
+          expect(isSafeObjectKey('constructor')).toBe(false);
+        });
+
+        it('should return false for prototype', () => {
+          expect(isSafeObjectKey('prototype')).toBe(false);
+        });
+
+        it('should return true for normal keys', () => {
+          expect(isSafeObjectKey('id')).toBe(true);
+          expect(isSafeObjectKey('name')).toBe(true);
+          expect(isSafeObjectKey('proto')).toBe(true); // Similar but not __proto__
+          expect(isSafeObjectKey('construct')).toBe(true); // Similar but not constructor
+        });
+      });
+
+      it('should reject __proto__ key to prevent prototype pollution', () => {
+        const row = new Map<string, GQLValue>([
+          ['__proto__', GQLValue.string('malicious')],
+          ['name', GQLValue.string('Alice')],
+        ]);
+
+        expect(() => rowToObject(row)).toThrow(/prototype pollution/i);
+      });
+
+      it('should reject constructor key to prevent prototype pollution', () => {
+        const row = new Map<string, GQLValue>([
+          ['constructor', GQLValue.string('malicious')],
+          ['name', GQLValue.string('Alice')],
+        ]);
+
+        expect(() => rowToObject(row)).toThrow(/prototype pollution/i);
+      });
+
+      it('should reject prototype key to prevent prototype pollution', () => {
+        const row = new Map<string, GQLValue>([
+          ['prototype', GQLValue.string('malicious')],
+          ['name', GQLValue.string('Alice')],
+        ]);
+
+        expect(() => rowToObject(row)).toThrow(/prototype pollution/i);
+      });
+
+      it('should create prototype-free object (no Object.prototype inheritance)', () => {
+        const row = new Map<string, GQLValue>([
+          ['id', GQLValue.int(42)],
+          ['toString', GQLValue.string('custom')], // Safe - not a dangerous key
+        ]);
+
+        const obj = rowToObject(row);
+
+        // Verify object has no prototype
+        expect(Object.getPrototypeOf(obj)).toBeNull();
+        // Verify we can safely set keys that shadow Object.prototype methods
+        expect(obj['toString']).toBe('custom');
+        // Verify normal functionality works
+        expect(obj['id']).toBe(42);
+      });
+
+      it('should allow normal keys that are not dangerous', () => {
+        const row = new Map<string, GQLValue>([
+          ['id', GQLValue.int(1)],
+          ['proto', GQLValue.string('safe')], // Similar but not __proto__
+          ['construct', GQLValue.string('safe')], // Similar but not constructor
+          ['prototypes', GQLValue.string('safe')], // Similar but not prototype
+        ]);
+
+        const obj = rowToObject(row);
+
+        expect(obj['id']).toBe(1);
+        expect(obj['proto']).toBe('safe');
+        expect(obj['construct']).toBe('safe');
+        expect(obj['prototypes']).toBe('safe');
+      });
     });
   });
 

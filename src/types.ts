@@ -457,6 +457,8 @@ export class GQLValue {
       case 'JSONB':
         return JSON.stringify(this._rawValue);
       default:
+        // Fallback for unknown types - safe to stringify
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
         return String(this._rawValue ?? '');
     }
   }
@@ -854,11 +856,38 @@ export function parseRow(raw: Record<string, unknown>, columns: ColumnInfo[]): R
 }
 
 /**
+ * Dangerous keys that could lead to prototype pollution if allowed.
+ * These keys are rejected when converting rows to objects.
+ */
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Check if a key is safe for object property assignment.
+ * Rejects keys that could lead to prototype pollution.
+ */
+export function isSafeObjectKey(key: string): boolean {
+  return !DANGEROUS_KEYS.has(key);
+}
+
+/**
  * Convert Row to plain object.
+ *
+ * Security: Uses Object.create(null) to create a prototype-free object
+ * and rejects dangerous keys (__proto__, constructor, prototype) that
+ * could lead to prototype pollution attacks.
+ *
+ * @throws {Error} If a row contains a dangerous key
  */
 export function rowToObject(row: Row): Record<string, unknown> {
-  const obj: Record<string, unknown> = {};
+  // GAP #17: Use Object.create(null) for prototype-free object
+  const obj = Object.create(null) as Record<string, unknown>;
   for (const [key, value] of row) {
+    // GAP #17: Reject dangerous keys to prevent prototype pollution
+    if (!isSafeObjectKey(key)) {
+      throw new Error(
+        `Row contains dangerous key that could cause prototype pollution: column names like '__proto__', 'constructor', or 'prototype' are not allowed`
+      );
+    }
     obj[key] = value.toJS();
   }
   return obj;

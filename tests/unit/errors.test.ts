@@ -158,6 +158,77 @@ describe('errors', () => {
 
       expect(err.message).toBe('geode: config host: is required');
     });
+
+    // Security tests for sensitive field redaction
+    it('should redact password values from error message', () => {
+      const err = new ConfigError({
+        field: 'password',
+        value: 'supersecret123',
+        message: 'too short',
+      });
+
+      // Password value should not appear in the error message
+      expect(err.message).toBe('geode: config password: too short');
+      expect(err.message).not.toContain('supersecret123');
+      // Value should not be stored on the error object either
+      expect(err.value).toBeUndefined();
+    });
+
+    it('should redact secret values from error message', () => {
+      const err = new ConfigError({
+        field: 'secret',
+        value: 'api-key-12345',
+        message: 'invalid format',
+      });
+
+      expect(err.message).not.toContain('api-key-12345');
+      expect(err.value).toBeUndefined();
+    });
+
+    it('should redact token values from error message', () => {
+      const err = new ConfigError({
+        field: 'token',
+        value: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9',
+        message: 'expired',
+      });
+
+      expect(err.message).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
+      expect(err.value).toBeUndefined();
+    });
+
+    it('should redact key values from error message', () => {
+      const err = new ConfigError({
+        field: 'key',
+        value: '/path/to/private.key',
+        message: 'file not found',
+      });
+
+      expect(err.message).not.toContain('/path/to/private.key');
+      expect(err.value).toBeUndefined();
+    });
+
+    it('should redact credential values from error message', () => {
+      const err = new ConfigError({
+        field: 'credential',
+        value: 'admin:password',
+        message: 'invalid',
+      });
+
+      expect(err.message).not.toContain('admin:password');
+      expect(err.value).toBeUndefined();
+    });
+
+    it('should not redact non-sensitive fields', () => {
+      const err = new ConfigError({
+        field: 'host',
+        value: 'localhost',
+        message: 'unreachable',
+      });
+
+      // Non-sensitive fields should still include the value
+      expect(err.message).toBe('geode: config host="localhost": unreachable');
+      expect(err.value).toBe('localhost');
+    });
   });
 
   describe('SecurityError', () => {

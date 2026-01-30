@@ -1,6 +1,9 @@
 # Geode Node.js Client CI/CD Pipeline
 # Uses DevNW CI/CD Catalog for standardized components
 # https://gitlab.com/devnw/ci-catalog
+#
+# SECURITY: All component versions are pinned to prevent supply chain attacks.
+# Update versions explicitly after security review.
 
 default:
   tags:
@@ -22,41 +25,41 @@ stages:
 # =============================================================================
 
 include:
-  # Node.js components
-  - component: gitlab.com/devnw/ci-catalog/node-install@~latest
+  # Node.js components - pinned versions
+  - component: gitlab.com/devnw/ci-catalog/node-install@v1.9.14
     inputs:
       stage: install
       node_version: '20'
 
-  - component: gitlab.com/devnw/ci-catalog/node-lint@~latest
+  - component: gitlab.com/devnw/ci-catalog/node-lint@v1.9.14
     inputs:
       stage: lint
       node_version: '20'
       lint_script: 'lint'
       allow_failure: false
 
-  - component: gitlab.com/devnw/ci-catalog/node-format@~latest
+  - component: gitlab.com/devnw/ci-catalog/node-format@v1.9.14
     inputs:
       stage: lint
       node_version: '20'
       format_script: 'format:check'
       allow_failure: false
 
-  - component: gitlab.com/devnw/ci-catalog/node-typecheck@~latest
+  - component: gitlab.com/devnw/ci-catalog/node-typecheck@v1.9.14
     inputs:
       stage: lint
       node_version: '20'
       typecheck_script: 'typecheck'
       allow_failure: false
 
-  - component: gitlab.com/devnw/ci-catalog/node-build@~latest
+  - component: gitlab.com/devnw/ci-catalog/node-build@v1.9.14
     inputs:
       stage: build
       node_version: '20'
       build_script: 'build'
       output_dir: 'dist'
 
-  - component: gitlab.com/devnw/ci-catalog/node-test@~latest
+  - component: gitlab.com/devnw/ci-catalog/node-test@v1.9.14
     inputs:
       stage: test
       node_version: '20'
@@ -64,25 +67,25 @@ include:
       coverage_report: true
       coverage_path: 'coverage/cobertura-coverage.xml'
 
-  # Security scanning
-  - component: gitlab.com/devnw/ci-catalog/security-sast@~latest
+  # Security scanning - pinned versions
+  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.9.14
     inputs:
       stage: security
 
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@~latest
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.9.14
     inputs:
       stage: security
 
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@~latest
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.9.14
     inputs:
       stage: security
 
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@~latest
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.9.14
 
-  # SBOM generation and scanning
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@~latest
+  # SBOM generation and scanning - pinned versions
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.9.14
 
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@~latest
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.9.14
     inputs:
       allow_failure: true
 

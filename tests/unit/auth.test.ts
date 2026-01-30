@@ -77,6 +77,64 @@ describe('AuthClient', () => {
           'Password too long'
         );
       });
+
+      // GAP #19: Regex character escaping tests
+      describe('password policy special character escaping', () => {
+        it('should accept password with hyphen when hyphen is in specialChars', async () => {
+          // The hyphen should be treated literally, not as a character range
+          auth.setPasswordPolicy({
+            requireSpecialChar: true,
+            specialChars: 'a-z!@#', // Hyphen should match literal '-', not a-z range
+          });
+
+          await auth.createUser('alice', {
+            password: 'Password-123', // Contains hyphen
+          });
+
+          expect(mockConn.exec).toHaveBeenCalled();
+        });
+
+        it('should reject password without hyphen when only hyphen is special char', async () => {
+          // If only hyphen is the special char, password without hyphen should fail
+          auth.setPasswordPolicy({
+            requireSpecialChar: true,
+            specialChars: '-', // Only hyphen as special char
+          });
+
+          await expect(
+            auth.createUser('alice', {
+              password: 'PasswordABC123', // No hyphen, no special chars
+            })
+          ).rejects.toThrow('special character');
+        });
+
+        it('should handle specialChars with regex metacharacters', async () => {
+          // Test that regex metacharacters are properly escaped
+          auth.setPasswordPolicy({
+            requireSpecialChar: true,
+            specialChars: '$^.+*', // Regex metacharacters
+          });
+
+          await auth.createUser('alice', {
+            password: 'Password$123', // Contains $
+          });
+
+          expect(mockConn.exec).toHaveBeenCalled();
+        });
+
+        it('should reject when password lacks required special char from escaped set', async () => {
+          auth.setPasswordPolicy({
+            requireSpecialChar: true,
+            specialChars: '[]{}()', // Bracket characters that need escaping
+          });
+
+          await expect(
+            auth.createUser('alice', {
+              password: 'PasswordABC123', // No special chars
+            })
+          ).rejects.toThrow('special character');
+        });
+      });
     });
 
     describe('deleteUser', () => {

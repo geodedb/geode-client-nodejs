@@ -6,7 +6,15 @@
 
 import type { Connection } from './connection.js';
 import { SecurityError } from './errors.js';
-import { validateQuery } from './validate.js';
+import {
+  validateLabel,
+  validatePermissionAction,
+  validatePermissionResource,
+  validateRLSAction,
+  validateRoleName,
+  validateRLSPredicate,
+  escapeGQLIdentifier,
+} from './validate.js';
 
 /**
  * User information.
@@ -107,6 +115,39 @@ export interface CreateRLSPolicyOptions {
 }
 
 /**
+ * Password policy configuration.
+ */
+export interface PasswordPolicy {
+  /** Minimum password length (default: 8) */
+  minLength?: number;
+  /** Maximum password length (default: 256) */
+  maxLength?: number;
+  /** Require at least one uppercase letter */
+  requireUppercase?: boolean;
+  /** Require at least one lowercase letter */
+  requireLowercase?: boolean;
+  /** Require at least one digit */
+  requireDigit?: boolean;
+  /** Require at least one special character */
+  requireSpecialChar?: boolean;
+  /** Special characters to accept (default: !@#$%^&*()_+-=[]{}|;:,.<>?) */
+  specialChars?: string;
+}
+
+/**
+ * Default password policy.
+ */
+export const DEFAULT_PASSWORD_POLICY: Required<PasswordPolicy> = {
+  minLength: 8,
+  maxLength: 256,
+  requireUppercase: false,
+  requireLowercase: false,
+  requireDigit: false,
+  requireSpecialChar: false,
+  specialChars: '!@#$%^&*()_+-=[]{}|;:,.<>?',
+};
+
+/**
  * Authentication and authorization client.
  *
  * Provides methods for managing users, roles, and row-level security policies.
@@ -129,14 +170,37 @@ export interface CreateRLSPolicyOptions {
  */
 export class AuthClient {
   private _conn: Connection;
+  private _passwordPolicy: Required<PasswordPolicy>;
 
   /**
    * Create a new auth client.
    *
    * @param conn - Connection to use
+   * @param passwordPolicy - Optional password policy configuration
    */
-  constructor(conn: Connection) {
+  constructor(conn: Connection, passwordPolicy?: PasswordPolicy) {
     this._conn = conn;
+    this._passwordPolicy = {
+      ...DEFAULT_PASSWORD_POLICY,
+      ...passwordPolicy,
+    };
+  }
+
+  /**
+   * Get the current password policy.
+   */
+  get passwordPolicy(): Readonly<PasswordPolicy> {
+    return this._passwordPolicy;
+  }
+
+  /**
+   * Update the password policy.
+   */
+  setPasswordPolicy(policy: PasswordPolicy): void {
+    this._passwordPolicy = {
+      ...this._passwordPolicy,
+      ...policy,
+    };
   }
 
   // User Management
@@ -151,17 +215,25 @@ export class AuthClient {
     this.validateUsername(username);
     this.validatePassword(options.password);
 
+    // Validate role names if provided
+    if (options.roles) {
+      for (const role of options.roles) {
+        validateRoleName(role);
+      }
+    }
+
     const roles = options.roles?.join(', ') ?? '';
     const active = options.active !== false ? 'true' : 'false';
 
-    const query = `
+    const gql = `
       CREATE USER $username
       SET password = $password
       ${roles ? `, roles = [${roles}]` : ''}
       , active = ${active}
     `.trim();
 
-    await this._conn.exec(query, {
+    // Note: exec() here is Connection.exec() for GQL, not shell execution
+    await this._conn.exec(gql, {
       params: {
         username,
         password: options.password,
@@ -391,13 +463,21 @@ export class AuthClient {
   async grantPermission(roleName: string, permission: Permission): Promise<void> {
     this.validateRoleName(roleName);
 
-    let query = `GRANT ${permission.action} ON ${permission.resource}`;
+    // Validate permission action and resource against allowlists
+    validatePermissionAction(permission.action);
+    validatePermissionResource(permission.resource);
     if (permission.label) {
-      query += `:${permission.label}`;
+      validateLabel(permission.label);
     }
-    query += ' TO $role';
 
-    await this._conn.exec(query, {
+    let gql = `GRANT ${permission.action.toUpperCase()} ON ${permission.resource.toUpperCase()}`;
+    if (permission.label) {
+      gql += `:${permission.label}`;
+    }
+    gql += ' TO $role';
+
+    // Note: exec() here is Connection.exec() for GQL, not shell execution
+    await this._conn.exec(gql, {
       params: { role: roleName },
     });
   }
@@ -411,13 +491,21 @@ export class AuthClient {
   async revokePermission(roleName: string, permission: Permission): Promise<void> {
     this.validateRoleName(roleName);
 
-    let query = `REVOKE ${permission.action} ON ${permission.resource}`;
+    // Validate permission action and resource against allowlists
+    validatePermissionAction(permission.action);
+    validatePermissionResource(permission.resource);
     if (permission.label) {
-      query += `:${permission.label}`;
+      validateLabel(permission.label);
     }
-    query += ' FROM $role';
 
-    await this._conn.exec(query, {
+    let gql = `REVOKE ${permission.action.toUpperCase()} ON ${permission.resource.toUpperCase()}`;
+    if (permission.label) {
+      gql += `:${permission.label}`;
+    }
+    gql += ' FROM $role';
+
+    // Note: exec() here is Connection.exec() for GQL, not shell execution
+    await this._conn.exec(gql, {
       params: { role: roleName },
     });
   }
@@ -441,20 +529,33 @@ export class AuthClient {
     options?: CreateRLSPolicyOptions
   ): Promise<void> {
     this.validatePolicyName(name);
-    validateQuery(predicate);
+    // Use strict predicate validation to prevent GQL injection (GAP #11)
+    validateRLSPredicate(predicate);
+
+    // Validate label, action, and roles
+    validateLabel(label);
+    validateRLSAction(action);
+    if (options?.roles) {
+      for (const role of options.roles) {
+        validateRoleName(role);
+      }
+    }
 
     const enabled = options?.enabled !== false ? 'ENABLE' : 'DISABLE';
     const roles = options?.roles?.length ? `FOR ROLES (${options.roles.join(', ')})` : '';
 
-    const query = `
-      CREATE POLICY $name ON :${label}
+    // GAP #14: Use escape function for defense-in-depth
+    const escapedLabel = escapeGQLIdentifier(label, 'label');
+    const gql = `
+      CREATE POLICY $name ON :${escapedLabel}
       FOR ${action}
       ${roles}
       USING (${predicate})
       ${enabled}
     `.trim();
 
-    await this._conn.exec(query, {
+    // Note: exec() here is Connection.exec() for GQL, not shell execution
+    await this._conn.exec(gql, {
       params: { name },
     });
   }
@@ -467,8 +568,11 @@ export class AuthClient {
    */
   async deleteRLSPolicy(name: string, label: string): Promise<void> {
     this.validatePolicyName(name);
+    // GAP #14: Use escape function for defense-in-depth (includes validation)
+    const escapedLabel = escapeGQLIdentifier(label, 'label');
 
-    await this._conn.exec(`DROP POLICY $name ON :${label}`, {
+    // Note: exec() here is Connection.exec() for GQL, not shell execution
+    await this._conn.exec(`DROP POLICY $name ON :${escapedLabel}`, {
       params: { name },
     });
   }
@@ -505,8 +609,11 @@ export class AuthClient {
    * @returns Array of policies
    */
   async listRLSPolicies(label?: string): Promise<RLSPolicy[]> {
-    const query = label ? `SHOW POLICIES ON :${label}` : 'SHOW POLICIES';
-    const result = await this._conn.queryAll(query);
+    // GAP #14: Use escape function for defense-in-depth (includes validation)
+    const escapedLabel = label ? escapeGQLIdentifier(label, 'label') : null;
+
+    const gql = escapedLabel ? `SHOW POLICIES ON :${escapedLabel}` : 'SHOW POLICIES';
+    const result = await this._conn.queryAll(gql);
 
     return result.map((row) => ({
       name: row['name'] as string,
@@ -526,8 +633,11 @@ export class AuthClient {
    */
   async enableRLSPolicy(name: string, label: string): Promise<void> {
     this.validatePolicyName(name);
+    // GAP #14: Use escape function for defense-in-depth (includes validation)
+    const escapedLabel = escapeGQLIdentifier(label, 'label');
 
-    await this._conn.exec(`ALTER POLICY $name ON :${label} ENABLE`, {
+    // Note: exec() here is Connection.exec() for GQL, not shell execution
+    await this._conn.exec(`ALTER POLICY $name ON :${escapedLabel} ENABLE`, {
       params: { name },
     });
   }
@@ -540,8 +650,11 @@ export class AuthClient {
    */
   async disableRLSPolicy(name: string, label: string): Promise<void> {
     this.validatePolicyName(name);
+    // GAP #14: Use escape function for defense-in-depth (includes validation)
+    const escapedLabel = escapeGQLIdentifier(label, 'label');
 
-    await this._conn.exec(`ALTER POLICY $name ON :${label} DISABLE`, {
+    // Note: exec() here is Connection.exec() for GQL, not shell execution
+    await this._conn.exec(`ALTER POLICY $name ON :${escapedLabel} DISABLE`, {
       params: { name },
     });
   }
@@ -577,6 +690,14 @@ export class AuthClient {
    * @returns Whether permission is granted
    */
   async hasPermission(resource: string, action: string, label?: string): Promise<boolean> {
+    // Validate inputs for proper error messages
+    validatePermissionResource(resource);
+    validatePermissionAction(action);
+    // GAP #14: Validate label if provided (the target is parameterized, but validation ensures good error messages)
+    if (label) {
+      validateLabel(label);
+    }
+
     const target = label ? `${resource}:${label}` : resource;
     const result = await this._conn.queryAll('RETURN has_permission($target, $action) AS allowed', {
       params: { target, action },
@@ -608,17 +729,54 @@ export class AuthClient {
   }
 
   private validatePassword(password: string): void {
-    if (!password || password.length < 8) {
+    const policy = this._passwordPolicy;
+
+    if (!password || password.length < policy.minLength) {
       throw new SecurityError({
         type: 'validation',
-        message: 'Password must be at least 8 characters',
+        message: `Password must be at least ${policy.minLength} characters`,
       });
     }
-    if (password.length > 256) {
+
+    if (password.length > policy.maxLength) {
       throw new SecurityError({
         type: 'validation',
-        message: 'Password too long (max 256 characters)',
+        message: `Password too long (max ${policy.maxLength} characters)`,
       });
+    }
+
+    if (policy.requireUppercase && !/[A-Z]/.test(password)) {
+      throw new SecurityError({
+        type: 'validation',
+        message: 'Password must contain at least one uppercase letter',
+      });
+    }
+
+    if (policy.requireLowercase && !/[a-z]/.test(password)) {
+      throw new SecurityError({
+        type: 'validation',
+        message: 'Password must contain at least one lowercase letter',
+      });
+    }
+
+    if (policy.requireDigit && !/[0-9]/.test(password)) {
+      throw new SecurityError({
+        type: 'validation',
+        message: 'Password must contain at least one digit',
+      });
+    }
+
+    if (policy.requireSpecialChar) {
+      // GAP #19: Escape hyphen to prevent it being interpreted as character range
+      // e.g., "a-z" should match literal 'a', '-', 'z', not all letters a-z
+      const specialCharsEscaped = policy.specialChars.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+      const specialRegex = new RegExp(`[${specialCharsEscaped}]`);
+      if (!specialRegex.test(password)) {
+        throw new SecurityError({
+          type: 'validation',
+          message: `Password must contain at least one special character (${policy.specialChars})`,
+        });
+      }
     }
   }
 
@@ -667,7 +825,10 @@ export class AuthClient {
 
 /**
  * Create an auth client from a connection.
+ *
+ * @param conn - Connection to use
+ * @param passwordPolicy - Optional password policy configuration
  */
-export function createAuthClient(conn: Connection): AuthClient {
-  return new AuthClient(conn);
+export function createAuthClient(conn: Connection, passwordPolicy?: PasswordPolicy): AuthClient {
+  return new AuthClient(conn, passwordPolicy);
 }
