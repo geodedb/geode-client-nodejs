@@ -525,7 +525,6 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
   }
 
   // Validate mTLS configuration - XOR: one but not both
-  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- Using logical OR for XOR check, not nullish fallback
   if ((cfg.tlsCert && !cfg.tlsKey) || (!cfg.tlsCert && cfg.tlsKey)) {
     throw new ConfigError({
       field: 'tls',

@@ -9,9 +9,10 @@
 import type { Decimal } from 'decimal.js-light';
 
 // Create Decimal at runtime to avoid TypeScript declaration issues
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-const DecimalClass: new (value: string | number) => Decimal = (await import('decimal.js-light'))
-  .default as any;
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- Dynamic import requires type assertion
+const DecimalClass: new (value: string | number) => Decimal =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Module type is incompatible
+  (await import('decimal.js-light')).default as any;
 
 // Helper to check if value is Decimal (duck typing)
 function isDecimal(value: unknown): value is Decimal {

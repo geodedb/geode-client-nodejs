@@ -46,6 +46,8 @@ await client.close();
 
 ### DSN Format
 
+> **Note**: See [`geode/docs/DSN.md`](../geode/docs/DSN.md) for the complete DSN specification.
+
 The client supports multiple transport schemes:
 
 ```

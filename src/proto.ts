@@ -85,6 +85,8 @@ export interface ProtoValue {
   extVal?: ExtendedValue;
 }
 
+// Empty interface for protobuf null value message
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface NullValue {}
 
 export interface IntValue {
@@ -225,6 +227,8 @@ export interface ProfilePayload {
   compact: boolean;
 }
 
+// Empty interface for protobuf heartbeat message
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface Heartbeat {}
 
 export interface ExecutionResponse {
@@ -238,6 +242,8 @@ export interface ExecutionResponse {
   heartbeat?: Heartbeat;
 }
 
+// Empty interface for protobuf ping request message
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PingRequest {}
 export interface PingResponse {
   ok: boolean;
@@ -404,7 +410,8 @@ export function jsToProtoValue(value: unknown): ProtoValue {
     return { mapVal: { entries } };
   }
 
-  // Default to string representation
+  // Default fallback for symbol/function types - convert to string representation
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Intentional fallback for edge cases
   return { stringVal: { value: String(value), kind: 1 } };
 }
 
