@@ -599,7 +599,7 @@ export class GeodeClient {
  *
  * @example
  * ```typescript
- * const client = await createClient('geode://localhost:3141');
+ * const client = await createClient('quic://localhost:3141');
  * const rows = await client.queryAll('MATCH (n) RETURN n LIMIT 10');
  * await client.close();
  * ```

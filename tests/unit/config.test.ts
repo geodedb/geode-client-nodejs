@@ -79,15 +79,15 @@ describe('config', () => {
       expect(cfg.port).toBe(8443);
     });
 
-    it('should parse geode:// URL', () => {
-      const cfg = parseDSN('geode://myserver:8443');
+    it('should parse quic:// URL', () => {
+      const cfg = parseDSN('quic://myserver:8443');
 
       expect(cfg.host).toBe('myserver');
       expect(cfg.port).toBe(8443);
     });
 
     it('should parse URL with credentials', () => {
-      const cfg = parseDSN('geode://admin:secret@myserver:3141');
+      const cfg = parseDSN('quic://admin:secret@myserver:3141');
 
       expect(cfg.host).toBe('myserver');
       expect(cfg.port).toBe(3141);
@@ -96,7 +96,7 @@ describe('config', () => {
     });
 
     it('should URL-decode credentials', () => {
-      const cfg = parseDSN('geode://user%40domain:pass%3Dword@myserver:3141');
+      const cfg = parseDSN('quic://user%40domain:pass%3Dword@myserver:3141');
 
       expect(cfg.username).toBe('user@domain');
       expect(cfg.password).toBe('pass=word');
@@ -111,10 +111,68 @@ describe('config', () => {
     });
 
     it('should parse URL query parameters', () => {
-      const cfg = parseDSN('geode://myserver:3141?page_size=500&insecure=true');
+      const cfg = parseDSN('quic://myserver:3141?page_size=500&insecure=true');
 
       expect(cfg.pageSize).toBe(500);
       expect(cfg.insecureSkipVerify).toBe(true);
+    });
+
+    describe('insecure_tls_skip_verify parameter', () => {
+      it('should parse insecure_tls_skip_verify=true (primary parameter)', () => {
+        const cfg = parseDSN('quic://localhost:3141?insecure_tls_skip_verify=true');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
+
+      it('should parse insecure_tls_skip_verify=1', () => {
+        const cfg = parseDSN('quic://localhost:3141?insecure_tls_skip_verify=1');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
+
+      it('should parse insecure_tls_skip_verify=yes', () => {
+        const cfg = parseDSN('quic://localhost:3141?insecure_tls_skip_verify=yes');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
+
+      it('should parse insecure_tls_skip_verify=on', () => {
+        const cfg = parseDSN('quic://localhost:3141?insecure_tls_skip_verify=on');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
+
+      it('should parse insecure_tls_skip_verify=false', () => {
+        const cfg = parseDSN('quic://localhost:3141?insecure_tls_skip_verify=false');
+        expect(cfg.insecureSkipVerify).toBe(false);
+      });
+
+      it('should parse insecure=true alias', () => {
+        const cfg = parseDSN('quic://localhost:3141?insecure=true');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
+
+      it('should parse insecure=1 alias', () => {
+        const cfg = parseDSN('grpc://localhost:50051?insecure=1');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
+
+      it('should parse skip_verify=true alias', () => {
+        const cfg = parseDSN('quic://localhost:3141?skip_verify=true');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
+
+      it('should parse skip_verify=yes alias', () => {
+        const cfg = parseDSN('quic://localhost:3141?skip_verify=yes');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
+
+      it('should default to undefined/falsy when not specified', () => {
+        const cfg = parseDSN('quic://localhost:3141');
+        expect(cfg.insecureSkipVerify).toBeFalsy();
+      });
+
+      it('should work with grpc transport', () => {
+        const cfg = parseDSN('grpc://localhost:50051?insecure_tls_skip_verify=true');
+        expect(cfg.transport).toBe('grpc');
+        expect(cfg.insecureSkipVerify).toBe(true);
+      });
     });
 
     it('should parse TLS options', () => {
@@ -237,18 +295,14 @@ describe('config', () => {
         expect(cfg.port).toBe(DEFAULT_GRPC_PORT);
       });
 
-      it('should parse grcp:// as alias for grpc://', () => {
-        const cfg = parseDSN('grcp://localhost:50051');
-
-        expect(cfg.transport).toBe('grpc');
-        expect(cfg.host).toBe('localhost');
-        expect(cfg.port).toBe(50051);
+      it('should reject grcp:// scheme (no longer supported)', () => {
+        expect(() => parseDSN('grcp://localhost:50051')).toThrow(ConfigError);
+        expect(() => parseDSN('grcp://localhost:50051')).toThrow(/unsupported scheme/);
       });
 
-      it('should default to quic transport for geode:// scheme', () => {
-        const cfg = parseDSN('geode://localhost:3141');
-
-        expect(cfg.transport).toBe('quic');
+      it('should reject geode:// scheme (no longer supported)', () => {
+        expect(() => parseDSN('geode://localhost:3141')).toThrow(ConfigError);
+        expect(() => parseDSN('geode://localhost:3141')).toThrow(/unsupported scheme/);
       });
 
       it('should default to quic transport for simple DSN', () => {
@@ -271,11 +325,11 @@ describe('config', () => {
         expect(() => parseDSN('ftp://localhost:1')).toThrow(ConfigError);
       });
       it('should reject invalid URL format', () => {
-        expect(() => parseDSN('geode://[invalid')).toThrow(ConfigError);
+        expect(() => parseDSN('quic://[invalid')).toThrow(ConfigError);
       });
 
       it('should reject missing host in URL', () => {
-        expect(() => parseDSN('geode://:3141')).toThrow(ConfigError);
+        expect(() => parseDSN('quic://:3141')).toThrow(ConfigError);
       });
 
       it('should reject invalid page_size', () => {
@@ -305,16 +359,16 @@ describe('config', () => {
         expect(() => parseDSN('myserver:-1')).toThrow(ConfigError);
       });
 
-      it('should reject invalid port in geode:// URL', () => {
+      it('should reject invalid port in quic:// URL', () => {
         // Note: URL constructor rejects 99999 and -1 as invalid URLs,
         // so only port 0 can be tested here (accepted by URL but invalid port range)
-        expect(() => parseDSN('geode://myserver:0')).toThrow(ConfigError);
+        expect(() => parseDSN('quic://myserver:0')).toThrow(ConfigError);
       });
 
       it('should reject invalid port in IPv6 address', () => {
         expect(() => parseDSN('[::1]:99999')).toThrow(ConfigError);
         expect(() => parseDSN('[::1]:0')).toThrow(ConfigError);
-        expect(() => parseDSN('geode://[::1]:99999')).toThrow(ConfigError);
+        expect(() => parseDSN('quic://[::1]:99999')).toThrow(ConfigError);
       });
     });
   });

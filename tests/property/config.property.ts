@@ -78,13 +78,13 @@ describe('Config Property Tests', () => {
       );
     });
 
-    it('should handle geode:// URLs with arbitrary paths', () => {
+    it('should handle quic:// URLs with arbitrary paths', () => {
       fc.assert(
-        fc.property(fc.webUrl({ validSchemes: ['geode'] }), (url) => {
-          // Replace http/https with geode
-          const geodeUrl = url.replace(/^https?:/, 'geode:');
+        fc.property(fc.webUrl({ validSchemes: ['quic'] }), (url) => {
+          // Replace http/https with quic
+          const quicUrl = url.replace(/^https?:/, 'quic:');
           try {
-            parseDSN(geodeUrl);
+            parseDSN(quicUrl);
             return true;
           } catch (e) {
             expect(e).toBeInstanceOf(ConfigError);

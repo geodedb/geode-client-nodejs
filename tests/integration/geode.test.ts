@@ -60,7 +60,7 @@ describe('Geode Integration Tests', () => {
     // Get server connection info from environment or defaults
     const host = process.env.GEODE_HOST || '127.0.0.1';
     const port = process.env.GEODE_PORT || '3141';
-    dsn = `geode://${host}:${port}?insecure=true`;
+    dsn = `quic://${host}:${port}?insecure=true`;
 
     try {
       // Attempt to connect to Geode server with retries for Docker startup

@@ -15,12 +15,12 @@ import {
 
 // Test fixtures
 const simpleDSN = 'localhost:3141';
-const urlDSN = 'geode://localhost:3141';
-const authDSN = 'geode://admin:secret@localhost:3141';
+const urlDSN = 'quic://localhost:3141';
+const authDSN = 'quic://admin:secret@localhost:3141';
 const fullDSN =
-  'geode://admin:secret@localhost:3141?page_size=500&hello_name=test&conformance=full&insecure=true';
+  'quic://admin:secret@localhost:3141?page_size=500&hello_name=test&conformance=full&insecure=true';
 const ipv6DSN = '[::1]:3141';
-const encodedDSN = 'geode://user%40domain:pass%3Dword@localhost:3141';
+const encodedDSN = 'quic://user%40domain:pass%3Dword@localhost:3141';
 
 describe('Configuration Benchmarks', () => {
   describe('Default Config', () => {
@@ -42,7 +42,7 @@ describe('Configuration Benchmarks', () => {
       parseDSN(simpleDSN);
     });
 
-    bench('parse geode:// URL', () => {
+    bench('parse quic:// URL', () => {
       parseDSN(urlDSN);
     });
 

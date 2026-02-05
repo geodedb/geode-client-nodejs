@@ -3,6 +3,8 @@
  *
  * DSN parsing and configuration management.
  * Supports quic:// and grpc:// transport schemes.
+ *
+ * See geode/docs/DSN.md for the complete DSN specification.
  */
 
 import { ConfigError } from './errors.js';
@@ -27,7 +29,7 @@ export type TransportType = 'quic' | 'grpc';
 /**
  * Supported DSN schemes.
  */
-export const SUPPORTED_SCHEMES = ['quic', 'grpc', 'grcp', 'geode'] as const;
+export const SUPPORTED_SCHEMES = ['quic', 'grpc'] as const;
 export type DSNScheme = (typeof SUPPORTED_SCHEMES)[number];
 
 /**
@@ -154,8 +156,6 @@ export function defaultConfig(): GeodeConfig {
  * Supported formats:
  *   - quic://host:port?options (QUIC transport, default)
  *   - grpc://host:port?options (gRPC transport)
- *   - grcp://host:port?options (gRPC alias, deprecated)
- *   - geode://host:port?options (legacy, defaults to QUIC)
  *   - host:port?options (defaults to QUIC)
  *   - host:port
  *   - host (uses default port)
@@ -246,10 +246,8 @@ export function parseDSN(dsn: string): GeodeConfig {
 function schemeToTransport(scheme: DSNScheme): TransportType {
   switch (scheme) {
     case 'grpc':
-    case 'grcp': // Alias with deprecation warning
       return 'grpc';
     case 'quic':
-    case 'geode':
     default:
       return 'quic';
   }
@@ -263,15 +261,9 @@ function getDefaultPortForTransport(transport: TransportType): number {
 }
 
 /**
- * Parse a URL format DSN (quic://, grpc://, geode://).
+ * Parse a URL format DSN (quic://, grpc://).
  */
 function parseURLDSN(dsn: string, cfg: GeodeConfig, scheme: DSNScheme): GeodeConfig {
-  // Emit deprecation warning for grcp:// alias
-  if (scheme === 'grcp') {
-    // eslint-disable-next-line no-console -- Intentional deprecation warning
-    console.warn('DEPRECATION WARNING: The grcp:// scheme is deprecated. Use grpc:// instead.');
-  }
-
   // Set transport based on scheme
   cfg.transport = schemeToTransport(scheme);
 
@@ -481,19 +473,25 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
         break;
 
       case 'ca':
+      case 'ca_cert':
         cfg.tlsCA = value;
         break;
 
       case 'cert':
+      case 'client_cert':
         cfg.tlsCert = value;
         break;
 
       case 'key':
+      case 'client_key':
         cfg.tlsKey = value;
         break;
 
+      case 'insecure_tls_skip_verify':
       case 'insecure':
-        cfg.insecureSkipVerify = value === 'true' || value === '1';
+      case 'skip_verify':
+        cfg.insecureSkipVerify =
+          value === 'true' || value === '1' || value === 'yes' || value === 'on';
         break;
 
       case 'tls':
@@ -504,10 +502,12 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
         cfg.serverName = value;
         break;
 
-      case 'connect_timeout': {
+      case 'connect_timeout':
+      case 'timeout': {
         const n = parseInt(value, 10);
         if (!isNaN(n) && n > 0) {
-          cfg.connectTimeout = n;
+          // If specified in seconds (timeout), convert to ms; connect_timeout is already in ms
+          cfg.connectTimeout = key === 'timeout' ? n * 1000 : n;
         }
         break;
       }
@@ -608,7 +608,7 @@ export function redactDSN(dsn: string): string {
     return dsn;
   }
 
-  // Handle URL format (quic://, grpc://, geode://)
+  // Handle URL format (quic://, grpc://)
   const schemeMatch = dsn.match(/^([a-z]+):\/\//i);
   if (schemeMatch) {
     const scheme = schemeMatch[1]!;
