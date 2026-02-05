@@ -4,11 +4,12 @@ This file provides guidance to Claude Code when working with the Geode Node.js c
 
 ## Project Overview
 
-This is the **Node.js client library** for **Geode**, implementing the ISO/IEC 39075:2024 GQL standard over QUIC + TLS 1.3.
+This is the **Node.js client library** for **Geode**, implementing the ISO/IEC 39075:2024 GQL standard over QUIC or gRPC with TLS 1.3.
 
 **Language**: TypeScript/JavaScript
 **Runtime**: Node.js 20+
-**Protocol**: QUIC + TLS 1.3, JSON Line Protocol
+**Protocol**: Protobuf wire protocol over QUIC (default) or gRPC
+**Package Type**: ESM-only
 
 ## Quick Reference
 
@@ -66,10 +67,11 @@ src/
 ├── client.ts         # GeodeClient - high-level API
 ├── connection.ts     # Connection management
 ├── transport.ts      # QUIC transport layer
-├── protocol.ts       # Wire protocol (JSON line format)
+├── grpc-transport.ts # gRPC transport layer
+├── proto.ts          # Protobuf encoding/decoding
 ├── types.ts          # GQL type system
 ├── errors.ts         # Error types (ISO status codes)
-├── config.ts         # Configuration/DSN parsing
+├── config.ts         # Configuration/DSN parsing (quic://, grpc://)
 ├── pool.ts           # Connection pooling
 ├── query-builder.ts  # Fluent query builder
 ├── result.ts         # Query result handling
@@ -79,25 +81,39 @@ src/
 ├── explain.ts        # Query explain/profile
 ├── batch.ts          # Batch query operations
 └── auth.ts           # Authentication client (users, roles, RLS)
+
+proto/
+└── geode.proto       # Protocol buffer definitions
 ```
 
 ## Wire Protocol
 
-The client communicates with Geode using JSON Line Protocol over QUIC.
+The client communicates with Geode using Protocol Buffers over QUIC or gRPC.
 
-### Message Types (Client → Server)
+**QUIC Wire Format**: 4-byte Big Endian length prefix + protobuf message body
+**gRPC**: Standard gRPC with protobuf serialization
 
-| Type        | Purpose               |
+### DSN Schemes
+
+| Scheme    | Transport | Default Port |
+| --------- | --------- | ------------ |
+| `quic://` | QUIC      | 3141         |
+| `grpc://` | gRPC      | 50051        |
+| `geode://`| QUIC      | 3141         |
+
+### Message Types (QuicClientMessage)
+
+| Field       | Purpose               |
 | ----------- | --------------------- |
-| HELLO       | Connection handshake  |
-| RUN_GQL     | Execute GQL query     |
-| PULL        | Fetch result page     |
-| BEGIN       | Start transaction     |
-| COMMIT      | Commit transaction    |
-| ROLLBACK    | Rollback transaction  |
-| SAVEPOINT   | Create savepoint      |
-| ROLLBACK_TO | Rollback to savepoint |
-| PING        | Health check          |
+| hello       | Connection handshake  |
+| execute     | Execute GQL query     |
+| pull        | Fetch result page     |
+| begin       | Start transaction     |
+| commit      | Commit transaction    |
+| rollback    | Rollback transaction  |
+| savepoint   | Create savepoint      |
+| rollbackTo  | Rollback to savepoint |
+| ping        | Health check          |
 
 ### Response Types (Server → Client)
 

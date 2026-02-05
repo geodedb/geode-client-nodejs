@@ -1,7 +1,10 @@
 /**
- * QUIC Transport Layer
+ * Transport Layer
  *
- * Provides QUIC + TLS 1.3 transport for communication with Geode server.
+ * Provides transport abstraction for communication with Geode server.
+ * Supports both QUIC (default) and gRPC transports.
+ *
+ * Wire format for QUIC: 4-byte Big Endian length prefix + protobuf message body.
  */
 
 import * as tls from 'node:tls';
@@ -11,6 +14,13 @@ import type { GeodeConfig } from './config.js';
 import { getAddress } from './config.js';
 import { TransportError, ErrClosed } from './errors.js';
 import { validateTLSCertPath } from './validate.js';
+import {
+  encodeWithLengthPrefix,
+  decodeQuicServerMessage,
+  decodeLengthPrefix,
+  type QuicClientMessage,
+  type QuicServerMessage,
+} from './proto.js';
 
 // ALPN protocol for Geode
 const GEODE_ALPN = ['geode/1'];
@@ -19,11 +29,11 @@ const GEODE_ALPN = ['geode/1'];
  * Transport interface for communication with Geode server.
  */
 export interface Transport {
-  /** Send a message to the server */
-  send(msg: Record<string, unknown>, signal?: AbortSignal): Promise<void>;
+  /** Send a protobuf message to the server */
+  sendProto(msg: QuicClientMessage, signal?: AbortSignal): Promise<void>;
 
-  /** Receive a message from the server */
-  receive(signal?: AbortSignal): Promise<Buffer>;
+  /** Receive a protobuf message from the server */
+  receiveProto(signal?: AbortSignal): Promise<QuicServerMessage>;
 
   /** Close the transport */
   close(): Promise<void>;
@@ -96,8 +106,7 @@ export async function buildTLSConfig(cfg: GeodeConfig): Promise<tls.SecureContex
 }
 
 /**
- * Abstract base class for QUIC transports.
- * Allows for different QUIC implementations.
+ * Abstract base class for transports.
  */
 export abstract class BaseTransport implements Transport {
   protected _closed = false;
@@ -107,8 +116,8 @@ export abstract class BaseTransport implements Transport {
     this._address = address;
   }
 
-  abstract send(msg: Record<string, unknown>, signal?: AbortSignal): Promise<void>;
-  abstract receive(signal?: AbortSignal): Promise<Buffer>;
+  abstract sendProto(msg: QuicClientMessage, signal?: AbortSignal): Promise<void>;
+  abstract receiveProto(signal?: AbortSignal): Promise<QuicServerMessage>;
   abstract close(): Promise<void>;
 
   isClosed(): boolean {
@@ -130,14 +139,14 @@ export abstract class BaseTransport implements Transport {
  * QUIC transport using @matrixai/quic.
  *
  * This implementation uses the quiche QUIC library via native bindings.
+ * Wire format: 4-byte Big Endian length prefix + protobuf message body.
  */
-export class MatrixQuicTransport extends BaseTransport {
+export class QuicTransport extends BaseTransport {
   private _client: unknown = null;
   private _stream: unknown = null;
-  private _readBuffer: Buffer[] = [];
-  private _lineBuffer = '';
-  private _pendingReads: Array<{
-    resolve: (value: Buffer) => void;
+  private _protoBuffer: Buffer = Buffer.alloc(0);
+  private _pendingProtoReads: Array<{
+    resolve: (value: QuicServerMessage) => void;
     reject: (error: Error) => void;
   }> = [];
 
@@ -148,9 +157,9 @@ export class MatrixQuicTransport extends BaseTransport {
   /**
    * Connect to the Geode server using QUIC.
    */
-  static async connect(cfg: GeodeConfig): Promise<MatrixQuicTransport> {
+  static async connect(cfg: GeodeConfig): Promise<QuicTransport> {
     const address = getAddress(cfg);
-    const transport = new MatrixQuicTransport(address);
+    const transport = new QuicTransport(address);
 
     try {
       // Dynamically import @matrixai/quic
@@ -304,47 +313,72 @@ export class MatrixQuicTransport extends BaseTransport {
    * Reject all pending reads with an error.
    */
   private rejectPendingReads(error: Error): void {
-    const pending = this._pendingReads;
-    this._pendingReads = [];
+    const pending = this._pendingProtoReads;
+    this._pendingProtoReads = [];
     for (const p of pending) {
       p.reject(error);
     }
   }
 
   /**
-   * Process received data, splitting by newlines.
+   * Process received data (length-prefixed protobuf messages).
    */
   private processData(data: Buffer): void {
-    this._lineBuffer += data.toString('utf-8');
+    this._protoBuffer = Buffer.concat([this._protoBuffer, data]);
 
-    let newlineIdx: number;
-    while ((newlineIdx = this._lineBuffer.indexOf('\n')) !== -1) {
-      const line = this._lineBuffer.slice(0, newlineIdx);
-      this._lineBuffer = this._lineBuffer.slice(newlineIdx + 1);
+    // Try to decode complete messages
+    while (this._protoBuffer.length >= 4) {
+      const msgLen = decodeLengthPrefix(this._protoBuffer);
+      const totalLen = 4 + msgLen;
 
-      if (line.length > 0) {
-        const pending = this._pendingReads.shift();
+      if (this._protoBuffer.length < totalLen) {
+        // Need more data
+        break;
+      }
+
+      // Extract and decode the message
+      const msgData = this._protoBuffer.subarray(4, totalLen);
+      this._protoBuffer = this._protoBuffer.subarray(totalLen);
+
+      try {
+        const msg = decodeQuicServerMessage(msgData);
+
+        // Resolve pending read or buffer the message
+        const pending = this._pendingProtoReads.shift();
         if (pending) {
-          pending.resolve(Buffer.from(line, 'utf-8'));
-        } else {
-          this._readBuffer.push(Buffer.from(line, 'utf-8'));
+          pending.resolve(msg);
+        }
+        // Note: We don't buffer proto messages, they must be consumed immediately
+      } catch (err) {
+        // Reject pending reads on decode error
+        const pending = this._pendingProtoReads.shift();
+        if (pending) {
+          pending.reject(
+            new TransportError({
+              operation: 'decode',
+              cause: err instanceof Error ? err : new Error(String(err)),
+            })
+          );
         }
       }
     }
   }
 
-  async send(msg: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+  /**
+   * Send a protobuf message with length prefix.
+   */
+  async sendProto(msg: QuicClientMessage, signal?: AbortSignal): Promise<void> {
     this.checkClosed();
 
     if (signal?.aborted) {
-      throw new TransportError({ operation: 'send', cause: new Error('Aborted') });
+      throw new TransportError({ operation: 'sendProto', cause: new Error('Aborted') });
     }
 
     if (!this._stream) {
-      throw new TransportError({ operation: 'send', cause: new Error('No stream') });
+      throw new TransportError({ operation: 'sendProto', cause: new Error('No stream') });
     }
 
-    const data = Buffer.from(JSON.stringify(msg) + '\n', 'utf-8');
+    const data = encodeWithLengthPrefix(msg);
 
     try {
       const stream = this._stream as {
@@ -356,41 +390,34 @@ export class MatrixQuicTransport extends BaseTransport {
       writer.releaseLock();
     } catch (e) {
       throw new TransportError({
-        operation: 'send',
+        operation: 'sendProto',
         address: this._address,
         cause: e instanceof Error ? e : new Error(String(e)),
       });
     }
   }
 
-  async receive(signal?: AbortSignal): Promise<Buffer> {
+  /**
+   * Receive a protobuf message.
+   */
+  async receiveProto(signal?: AbortSignal): Promise<QuicServerMessage> {
     this.checkClosed();
 
     if (signal?.aborted) {
-      throw new TransportError({ operation: 'receive', cause: new Error('Aborted') });
+      throw new TransportError({ operation: 'receiveProto', cause: new Error('Aborted') });
     }
 
-    // Check buffer first
-    const buffered = this._readBuffer.shift();
-    if (buffered) {
-      return buffered;
-    }
-
-    // Wait for data
     return new Promise((resolve, reject) => {
-      // GAP #16: Track abort listener for cleanup
       let onAbort: (() => void) | null = null;
 
       const pendingRead = {
-        resolve: (value: Buffer) => {
-          // GAP #16: Clean up abort listener on successful resolution
+        resolve: (value: QuicServerMessage) => {
           if (onAbort && signal) {
             signal.removeEventListener('abort', onAbort);
           }
           resolve(value);
         },
         reject: (error: Error) => {
-          // GAP #16: Clean up abort listener on rejection
           if (onAbort && signal) {
             signal.removeEventListener('abort', onAbort);
           }
@@ -398,19 +425,15 @@ export class MatrixQuicTransport extends BaseTransport {
         },
       };
 
-      // GAP #16: Push to queue BEFORE registering abort listener to avoid race condition
-      // where abort fires before pendingRead is in the queue
-      this._pendingReads.push(pendingRead);
+      this._pendingProtoReads.push(pendingRead);
 
       if (signal) {
         onAbort = () => {
-          // CRITICAL: Remove this pending read from the queue before rejecting
-          // to prevent data loss when the abort signal fires after data arrives
-          const idx = this._pendingReads.indexOf(pendingRead);
+          const idx = this._pendingProtoReads.indexOf(pendingRead);
           if (idx !== -1) {
-            this._pendingReads.splice(idx, 1);
+            this._pendingProtoReads.splice(idx, 1);
           }
-          reject(new TransportError({ operation: 'receive', cause: new Error('Aborted') }));
+          reject(new TransportError({ operation: 'receiveProto', cause: new Error('Aborted') }));
         };
         signal.addEventListener('abort', onAbort, { once: true });
       }
@@ -422,10 +445,10 @@ export class MatrixQuicTransport extends BaseTransport {
     this._closed = true;
 
     // Reject pending reads
-    for (const pending of this._pendingReads) {
+    for (const pending of this._pendingProtoReads) {
       pending.reject(ErrClosed);
     }
-    this._pendingReads = [];
+    this._pendingProtoReads = [];
 
     // Close QUIC client
     if (this._client) {
@@ -445,13 +468,13 @@ export class MatrixQuicTransport extends BaseTransport {
 /**
  * Mock transport for testing purposes.
  *
- * This allows unit testing without a real QUIC connection.
+ * This allows unit testing without a real connection.
  */
 export class MockTransport extends BaseTransport {
-  private _sendQueue: Record<string, unknown>[] = [];
-  private _receiveQueue: Buffer[] = [];
-  private _pendingReads: Array<{
-    resolve: (value: Buffer) => void;
+  private _protoSendQueue: QuicClientMessage[] = [];
+  private _protoReceiveQueue: QuicServerMessage[] = [];
+  private _pendingProtoReads: Array<{
+    resolve: (value: QuicServerMessage) => void;
     reject: (error: Error) => void;
   }> = [];
 
@@ -460,73 +483,66 @@ export class MockTransport extends BaseTransport {
   }
 
   /**
-   * Queue a response to be returned by receive().
+   * Queue a protobuf response.
    */
-  queueResponse(response: Record<string, unknown>): void {
-    const data = Buffer.from(JSON.stringify(response), 'utf-8');
-    this._receiveQueue.push(data);
-
-    // Resolve any pending reads
-    const pending = this._pendingReads.shift();
+  queueProtoResponse(response: QuicServerMessage): void {
+    // Resolve pending read or queue
+    const pending = this._pendingProtoReads.shift();
     if (pending) {
-      const queued = this._receiveQueue.shift();
-      if (queued) {
-        pending.resolve(queued);
-      }
+      pending.resolve(response);
+    } else {
+      this._protoReceiveQueue.push(response);
     }
   }
 
   /**
-   * Get all sent messages.
+   * Get all sent protobuf messages.
    */
-  getSentMessages(): Record<string, unknown>[] {
-    return [...this._sendQueue];
+  getSentProtoMessages(): QuicClientMessage[] {
+    return [...this._protoSendQueue];
   }
 
   /**
    * Clear sent messages.
    */
   clearSentMessages(): void {
-    this._sendQueue = [];
+    this._protoSendQueue = [];
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async send(msg: Record<string, unknown>, signal?: AbortSignal): Promise<void> {
+  async sendProto(msg: QuicClientMessage, signal?: AbortSignal): Promise<void> {
     this.checkClosed();
 
     if (signal?.aborted) {
-      throw new TransportError({ operation: 'send', cause: new Error('Aborted') });
+      throw new TransportError({ operation: 'sendProto', cause: new Error('Aborted') });
     }
 
-    this._sendQueue.push(msg);
+    this._protoSendQueue.push(msg);
   }
 
-  async receive(signal?: AbortSignal): Promise<Buffer> {
+  async receiveProto(signal?: AbortSignal): Promise<QuicServerMessage> {
     this.checkClosed();
 
     if (signal?.aborted) {
-      throw new TransportError({ operation: 'receive', cause: new Error('Aborted') });
+      throw new TransportError({ operation: 'receiveProto', cause: new Error('Aborted') });
     }
 
-    const queued = this._receiveQueue.shift();
+    const queued = this._protoReceiveQueue.shift();
     if (queued) {
       return queued;
     }
 
     return new Promise((resolve, reject) => {
-      // GAP #16: Track abort listener for cleanup
       let onAbort: (() => void) | null = null;
 
       const pendingRead = {
-        resolve: (value: Buffer) => {
-          // GAP #16: Clean up abort listener on successful resolution
+        resolve: (value: QuicServerMessage) => {
           if (onAbort && signal) {
             signal.removeEventListener('abort', onAbort);
           }
           resolve(value);
         },
         reject: (error: Error) => {
-          // GAP #16: Clean up abort listener on rejection
           if (onAbort && signal) {
             signal.removeEventListener('abort', onAbort);
           }
@@ -534,18 +550,15 @@ export class MockTransport extends BaseTransport {
         },
       };
 
-      // GAP #16: Push to queue BEFORE registering abort listener to avoid race condition
-      this._pendingReads.push(pendingRead);
+      this._pendingProtoReads.push(pendingRead);
 
       if (signal) {
         onAbort = () => {
-          // CRITICAL: Remove this pending read from the queue before rejecting
-          // to prevent data loss when the abort signal fires after data arrives
-          const idx = this._pendingReads.indexOf(pendingRead);
+          const idx = this._pendingProtoReads.indexOf(pendingRead);
           if (idx !== -1) {
-            this._pendingReads.splice(idx, 1);
+            this._pendingProtoReads.splice(idx, 1);
           }
-          reject(new TransportError({ operation: 'receive', cause: new Error('Aborted') }));
+          reject(new TransportError({ operation: 'receiveProto', cause: new Error('Aborted') }));
         };
         signal.addEventListener('abort', onAbort, { once: true });
       }
@@ -557,21 +570,26 @@ export class MockTransport extends BaseTransport {
     if (this._closed) return;
     this._closed = true;
 
-    for (const pending of this._pendingReads) {
+    for (const pending of this._pendingProtoReads) {
       pending.reject(ErrClosed);
     }
-    this._pendingReads = [];
+    this._pendingProtoReads = [];
   }
 }
 
 /**
  * Create a transport for the given configuration.
  *
- * Uses MatrixQuicTransport by default.
+ * Selects between QUIC and gRPC based on config.transport.
  */
 export async function createTransport(cfg: GeodeConfig): Promise<Transport> {
-  return MatrixQuicTransport.connect(cfg);
+  if (cfg.transport === 'grpc') {
+    const { GrpcTransport } = await import('./grpc-transport.js');
+    return GrpcTransport.connect(cfg);
+  }
+  return QuicTransport.connect(cfg);
 }
 
-// Export for backwards compatibility
-export { MatrixQuicTransport as QuicheTransport };
+// Legacy export aliases
+export { QuicTransport as MatrixQuicTransport };
+export { QuicTransport as QuicheTransport };

@@ -4,7 +4,25 @@
  * Implements the GQL value type system for ISO/IEC 39075:2024 compliance.
  */
 
-import Decimal from 'decimal.js-light';
+// Import Decimal from decimal.js-light
+// The module has compatibility issues with TypeScript ESM declarations, so we use type-only import + runtime require
+import type { Decimal } from 'decimal.js-light';
+
+// Create Decimal at runtime to avoid TypeScript declaration issues
+// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+const DecimalClass: new (value: string | number) => Decimal = (await import('decimal.js-light'))
+  .default as any;
+
+// Helper to check if value is Decimal (duck typing)
+function isDecimal(value: unknown): value is Decimal {
+  return value !== null && typeof value === 'object' && 'toFixed' in value && 'toNumber' in value;
+}
+
+// Helper to create Decimal
+function createDecimal(value: string | number | Decimal): Decimal {
+  if (isDecimal(value)) return value;
+  return new DecimalClass(value);
+}
 
 /**
  * GQL value kind enumeration.
@@ -209,7 +227,7 @@ export class GQLValue {
 
   static decimal(value: string | number | Decimal): GQLValue {
     const v = new GQLValue('DECIMAL');
-    v._decimalValue = value instanceof Decimal ? value : new Decimal(value);
+    v._decimalValue = createDecimal(value);
     return v;
   }
 

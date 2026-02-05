@@ -1,13 +1,15 @@
 /**
  * Geode Connection
  *
- * Connection management and query execution.
+ * Connection management and query execution using protobuf wire protocol.
  */
 
 import type { GeodeConfig } from './config.js';
 import { validateConfig } from './config.js';
 import {
+  DriverError,
   TransportError,
+  StatusClass,
   ErrClosed,
   ErrQueryInProgress,
   ErrTxInProgress,
@@ -16,30 +18,29 @@ import {
 import type { Transport } from './transport.js';
 import { createTransport } from './transport.js';
 import {
-  buildHelloMessage,
-  buildRunGQLMessage,
-  buildPullMessage,
-  buildBeginMessage,
-  buildCommitMessage,
-  buildRollbackMessage,
-  buildSavepointMessage,
-  buildRollbackToMessage,
-  buildPingMessage,
-  parseFrame,
-  isErrorFrame,
-  isSchemaFrame,
-  frameToError,
-  getColumnsFromSchema,
-  rewritePlaceholders,
-  RespType,
-} from './protocol.js';
+  buildHelloRequest,
+  buildExecuteRequest,
+  buildPullRequest,
+  buildPingRequest,
+  buildBeginRequest,
+  buildCommitRequest,
+  buildRollbackRequest,
+  buildSavepointRequest,
+  buildRollbackToRequest,
+  rowToRecord,
+  type QuicServerMessage,
+  type ExecutionResponse,
+  type ColumnDefinition,
+  type DataPage,
+} from './proto.js';
 import { validateQuery, validateParamValue, validateSavepointName } from './validate.js';
-import { rowToObject } from './types.js';
 import { Transaction } from './transaction.js';
 import { QueryResult } from './result.js';
 import type { PreparedStatement } from './prepared.js';
 import type { QueryPlan, QueryProfile, ExplainOptions } from './explain.js';
 import type { BatchQuery, BatchSummary, BatchOptions } from './batch.js';
+import type { ColumnInfo, GQLType } from './types.js';
+import { parseGQLType } from './types.js';
 
 /**
  * Query parameters type.
@@ -59,6 +60,61 @@ export interface QueryOptions {
 }
 
 /**
+ * Convert a protobuf ExecutionResponse error to a DriverError.
+ */
+function protoErrorToDriverError(response: ExecutionResponse, statusClass?: string): DriverError {
+  const err = response.error;
+  return new DriverError({
+    statusClass: (statusClass ?? err?.code ?? StatusClass.SYSTEM) as typeof StatusClass.SYSTEM,
+    subclass: '000',
+    code: err?.code ?? 'UnknownError',
+    message: err?.message ?? 'Unknown error',
+    anchor: err?.anchor,
+    additional: [],
+    findings: response.status?.flaggerFindings ?? [],
+  });
+}
+
+/**
+ * Check if an ExecutionResponse is an error.
+ */
+function isErrorResponse(response: ExecutionResponse): boolean {
+  return response.error !== undefined;
+}
+
+/**
+ * Check if an ExecutionResponse contains a schema.
+ */
+function isSchemaResponse(response: ExecutionResponse): boolean {
+  return response.schema !== undefined;
+}
+
+/**
+ * Check if an ExecutionResponse contains a data page.
+ */
+function isDataPageResponse(response: ExecutionResponse): boolean {
+  return response.page !== undefined;
+}
+
+/**
+ * Convert protobuf columns to ColumnInfo array.
+ */
+function columnsToColumnInfo(columns: ColumnDefinition[]): ColumnInfo[] {
+  return columns.map((col) => ({
+    name: col.name,
+    type: col.type as GQLType,
+    kind: parseGQLType(col.type),
+  }));
+}
+
+/**
+ * Convert a DataPage to row records.
+ */
+function dataPageToRows(page: DataPage, columns: ColumnDefinition[]): Record<string, unknown>[] {
+  return page.rows.map((row) => rowToRecord(row, columns));
+}
+
+/**
  * Connection to a Geode database.
  */
 export class Connection {
@@ -68,6 +124,8 @@ export class Connection {
   private _inTransaction = false;
   private _activeResult: QueryResult | null = null;
   private _requestId = 0;
+  private _sessionId = '';
+  private _columns: ColumnDefinition[] = [];
 
   private constructor(config: GeodeConfig, transport: Transport) {
     this._config = config;
@@ -133,29 +191,49 @@ export class Connection {
   }
 
   /**
+   * Get session ID.
+   */
+  get sessionId(): string {
+    return this._sessionId;
+  }
+
+  /**
    * Perform the HELLO handshake.
-   *
-   * Note: The server may return an ERROR frame with "Authentication required"
-   * even when no authentication is configured. This is a known server behavior
-   * that should be treated as a successful connection (matching other clients).
    */
   private async hello(): Promise<void> {
-    const msg = buildHelloMessage(this._config);
-    await this._transport.send(msg);
+    const msg = buildHelloRequest(
+      this._config.username ?? '',
+      this._config.password ?? '',
+      this._config.helloName,
+      this._config.helloVersion,
+      this._config.conformance
+    );
 
-    const data = await this._transport.receive();
-    const frame = parseFrame(data);
+    await this._transport.sendProto(msg);
+    const response = await this._transport.receiveProto();
 
-    // Don't throw on authentication errors during HELLO when no auth is configured
-    // The server may return this error but still accept the connection
-    if (isErrorFrame(frame)) {
-      const statusClass = frame.status_class ?? frame.result.code;
-      // 28000 is "invalid authorization specification" - ignore if no credentials provided
-      const hasCredentials = Boolean(this._config.username) || Boolean(this._config.password);
-      if (statusClass !== '28000' || hasCredentials) {
-        throw frameToError(frame);
+    if (response.hello) {
+      if (!response.hello.success) {
+        // Check if this is an auth error when no credentials were provided
+        const hasCredentials = Boolean(this._config.username) || Boolean(this._config.password);
+        if (!hasCredentials && response.hello.errorMessage.includes('Authentication')) {
+          // Ignore auth errors when no credentials - server may still accept connection
+          this._sessionId = response.hello.sessionId || '';
+          return;
+        }
+        throw new DriverError({
+          statusClass: StatusClass.AUTH,
+          subclass: '000',
+          code: 'AuthenticationFailed',
+          message: response.hello.errorMessage || 'Authentication failed',
+        });
       }
-      // Otherwise, continue - the connection is still valid
+      this._sessionId = response.hello.sessionId;
+    } else {
+      throw new TransportError({
+        operation: 'hello',
+        cause: new Error('Invalid HELLO response'),
+      });
     }
   }
 
@@ -167,15 +245,7 @@ export class Connection {
 
     validateQuery(query);
 
-    let finalQuery = query;
-    let params = options?.params ?? {};
-
-    // Handle positional parameters (?)
-    if (query.includes('?') && Array.isArray(options?.params)) {
-      const result = rewritePlaceholders(query, options.params as unknown[]);
-      finalQuery = result.query;
-      params = result.params;
-    }
+    const params = options?.params ?? {};
 
     // Validate parameters
     for (const [_key, value] of Object.entries(params)) {
@@ -187,74 +257,97 @@ export class Connection {
     try {
       this._state = 'fetching';
 
-      // Send RUN_GQL
-      await this._transport.send(buildRunGQLMessage(finalQuery, params), signal);
+      // Send Execute request
+      const msg = buildExecuteRequest(this._sessionId, query, params);
+      await this._transport.sendProto(msg, signal);
 
-      // Read SCHEMA response
-      const schemaData = await this._transport.receive(signal);
-      const schemaFrame = parseFrame(schemaData);
+      // Read response - should be schema or error
+      const response = await this._transport.receiveProto(signal);
 
-      if (isErrorFrame(schemaFrame)) {
-        this._state = this._inTransaction ? 'in_transaction' : 'idle';
-        throw frameToError(schemaFrame);
-      }
-
-      if (!isSchemaFrame(schemaFrame)) {
+      if (!response.execute) {
         this._state = this._inTransaction ? 'in_transaction' : 'idle';
         throw new TransportError({
           operation: 'query',
-          cause: new Error(`Expected SCHEMA frame, got ${schemaFrame.result.type}`),
+          cause: new Error('Invalid execute response'),
         });
       }
 
-      const columns = getColumnsFromSchema(schemaFrame);
+      const execResp = response.execute;
 
-      // Inline RUN+PULL: check if a bindings frame already arrived.
-      const inlineFrame = await this._tryReceiveInlineFrame(signal);
-      if (inlineFrame) {
-        if (isErrorFrame(inlineFrame)) {
-          this._state = this._inTransaction ? 'in_transaction' : 'idle';
-          throw frameToError(inlineFrame);
-        }
-
-        const result = new QueryResult(
-          this,
-          columns,
-          inlineFrame.result.rows ?? [],
-          inlineFrame.result.final ?? true,
-          inlineFrame.result.ordered ?? false,
-          inlineFrame.result.order_keys ?? [],
-          options?.pageSize ?? this._config.pageSize,
-          signal
-        );
-
-        this._activeResult = result;
-        return result;
+      if (isErrorResponse(execResp)) {
+        this._state = this._inTransaction ? 'in_transaction' : 'idle';
+        throw protoErrorToDriverError(execResp, execResp.status?.statusClass);
       }
 
-      // Send first PULL
-      this._requestId++;
-      const pageSize = options?.pageSize ?? this._config.pageSize;
-      await this._transport.send(buildPullMessage(this._requestId, pageSize), signal);
-
-      // Read first BINDINGS response
-      const bindingsData = await this._transport.receive(signal);
-      const bindingsFrame = parseFrame(bindingsData);
-
-      if (isErrorFrame(bindingsFrame)) {
+      if (!isSchemaResponse(execResp)) {
         this._state = this._inTransaction ? 'in_transaction' : 'idle';
-        throw frameToError(bindingsFrame);
+        throw new TransportError({
+          operation: 'query',
+          cause: new Error('Expected schema response'),
+        });
+      }
+
+      this._columns = execResp.schema!.columns;
+      const columns = columnsToColumnInfo(this._columns);
+
+      // Check if there's an inline data page
+      let initialRows: Record<string, unknown>[] = [];
+      let isFinal = false;
+      let isOrdered = false;
+      let orderKeys: string[] = [];
+
+      // Try to receive inline data page with short timeout
+      const inlineResponse = await this._tryReceiveInline(signal);
+      if (inlineResponse?.execute) {
+        const inlineExec = inlineResponse.execute;
+        if (isErrorResponse(inlineExec)) {
+          this._state = this._inTransaction ? 'in_transaction' : 'idle';
+          throw protoErrorToDriverError(inlineExec, inlineExec.status?.statusClass);
+        }
+        if (isDataPageResponse(inlineExec)) {
+          const page = inlineExec.page!;
+          initialRows = dataPageToRows(page, this._columns);
+          isFinal = page.final;
+          isOrdered = page.ordered;
+          orderKeys = page.orderKeys;
+        }
+      }
+
+      if (!isFinal && initialRows.length === 0) {
+        // Send first PULL
+        this._requestId++;
+        const pageSize = options?.pageSize ?? this._config.pageSize;
+        const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
+        await this._transport.sendProto(pullMsg, signal);
+
+        // Read data page response
+        const pullResponse = await this._transport.receiveProto(signal);
+
+        if (pullResponse.execute) {
+          const pullExec = pullResponse.execute;
+          if (isErrorResponse(pullExec)) {
+            this._state = this._inTransaction ? 'in_transaction' : 'idle';
+            throw protoErrorToDriverError(pullExec, pullExec.status?.statusClass);
+          }
+          if (isDataPageResponse(pullExec)) {
+            const page = pullExec.page!;
+            initialRows = dataPageToRows(page, this._columns);
+            isFinal = page.final;
+            isOrdered = page.ordered;
+            orderKeys = page.orderKeys;
+          }
+        }
       }
 
       // Create result
       const result = new QueryResult(
         this,
         columns,
-        bindingsFrame.result.rows ?? [],
-        bindingsFrame.result.final ?? true,
-        bindingsFrame.result.ordered ?? false,
-        bindingsFrame.result.order_keys ?? [],
-        pageSize,
+        initialRows,
+        isFinal,
+        isOrdered,
+        orderKeys,
+        options?.pageSize ?? this._config.pageSize,
         signal
       );
 
@@ -274,7 +367,14 @@ export class Connection {
     const rows: Record<string, unknown>[] = [];
 
     for await (const row of result) {
-      rows.push(rowToObject(row));
+      // Convert row values to plain objects
+      // Row is a Map<string, GQLValue>, so use .get() to access values
+      const obj: Record<string, unknown> = {};
+      for (const col of result.columns) {
+        const value = row.get(col.name);
+        obj[col.name] = value?.toJS();
+      }
+      rows.push(obj);
     }
 
     return rows;
@@ -288,15 +388,7 @@ export class Connection {
 
     validateQuery(query);
 
-    let finalQuery = query;
-    let params = options?.params ?? {};
-
-    // Handle positional parameters
-    if (query.includes('?') && Array.isArray(options?.params)) {
-      const result = rewritePlaceholders(query, options.params as unknown[]);
-      finalQuery = result.query;
-      params = result.params;
-    }
+    const params = options?.params ?? {};
 
     // Validate parameters
     for (const [_key, value] of Object.entries(params)) {
@@ -308,22 +400,35 @@ export class Connection {
     try {
       this._state = 'executing';
 
-      // Send RUN_GQL
-      await this._transport.send(buildRunGQLMessage(finalQuery, params), signal);
+      // Send Execute request
+      const msg = buildExecuteRequest(this._sessionId, query, params);
+      await this._transport.sendProto(msg, signal);
 
       // Read response
-      const data = await this._transport.receive(signal);
-      const frame = parseFrame(data);
+      const response = await this._transport.receiveProto(signal);
 
-      if (isErrorFrame(frame)) {
-        throw frameToError(frame);
+      if (!response.execute) {
+        throw new TransportError({
+          operation: 'exec',
+          cause: new Error('Invalid execute response'),
+        });
       }
 
-      // Drain any inline BINDINGS frame to keep the stream aligned.
-      if (frame.result.type === RespType.SCHEMA) {
-        const inlineFrame = await this._tryReceiveInlineFrame(signal);
-        if (inlineFrame && isErrorFrame(inlineFrame)) {
-          throw frameToError(inlineFrame);
+      const execResp = response.execute;
+
+      if (isErrorResponse(execResp)) {
+        throw protoErrorToDriverError(execResp, execResp.status?.statusClass);
+      }
+
+      // If there's a schema, drain any data pages
+      if (isSchemaResponse(execResp)) {
+        this._columns = execResp.schema!.columns;
+        const inlineResponse = await this._tryReceiveInline(signal);
+        if (inlineResponse?.execute && isErrorResponse(inlineResponse.execute)) {
+          throw protoErrorToDriverError(
+            inlineResponse.execute,
+            inlineResponse.execute.status?.statusClass
+          );
         }
       }
     } finally {
@@ -342,43 +447,47 @@ export class Connection {
     final: boolean;
   }> {
     this._requestId++;
-    await this._transport.send(buildPullMessage(this._requestId, pageSize), signal);
+    const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
+    await this._transport.sendProto(pullMsg, signal);
 
-    const data = await this._transport.receive(signal);
-    const frame = parseFrame(data);
+    const response = await this._transport.receiveProto(signal);
 
-    if (isErrorFrame(frame)) {
-      throw frameToError(frame);
+    if (!response.execute) {
+      return { rows: [], final: true };
     }
 
-    const resultType = frame.result.type;
-    if (resultType === RespType.BINDINGS) {
+    const execResp = response.execute;
+
+    if (isErrorResponse(execResp)) {
+      throw protoErrorToDriverError(execResp, execResp.status?.statusClass);
+    }
+
+    if (isDataPageResponse(execResp)) {
+      const page = execResp.page!;
       return {
-        rows: frame.result.rows ?? [],
-        final: frame.result.final ?? true,
+        rows: dataPageToRows(page, this._columns),
+        final: page.final,
       };
     }
 
-    // PROFILE, RESULT, STATUS frames indicate no more data
-    return {
-      rows: [],
-      final: true,
-    };
+    // Metrics, profile, etc. indicate no more data
+    return { rows: [], final: true };
   }
 
-  private async _tryReceiveInlineFrame(
-    signal?: AbortSignal
-  ): Promise<ReturnType<typeof parseFrame> | null> {
+  /**
+   * Try to receive an inline response with short timeout.
+   */
+  private async _tryReceiveInline(signal?: AbortSignal): Promise<QuicServerMessage | null> {
     if (signal?.aborted) {
       return null;
     }
+
     const controller = new AbortController();
-    // Use 10ms timeout to check for inline data - gives time for data in network
-    // buffers to be processed while still being fast enough for latency-sensitive queries
     const timeoutId = setTimeout(() => controller.abort(), 10);
+
     try {
-      const data = await this._transport.receive(controller.signal);
-      return parseFrame(data);
+      const response = await this._transport.receiveProto(controller.signal);
+      return response;
     } catch (err) {
       if (err instanceof TransportError && err.cause?.message === 'Aborted') {
         return null;
@@ -409,13 +518,20 @@ export class Connection {
       throw ErrTxInProgress;
     }
 
-    await this._transport.send(buildBeginMessage(), signal);
+    const msg = buildBeginRequest(false, this._sessionId);
+    await this._transport.sendProto(msg, signal);
 
-    const data = await this._transport.receive(signal);
-    const frame = parseFrame(data);
+    const response = await this._transport.receiveProto(signal);
 
-    if (isErrorFrame(frame)) {
-      throw frameToError(frame);
+    if (response.begin) {
+      if (response.begin.sessionId) {
+        this._sessionId = response.begin.sessionId;
+      }
+    } else {
+      throw new TransportError({
+        operation: 'begin',
+        cause: new Error('Invalid BEGIN response'),
+      });
     }
 
     this._inTransaction = true;
@@ -428,13 +544,25 @@ export class Connection {
    * Commit the current transaction (internal).
    */
   async _commit(signal?: AbortSignal): Promise<void> {
-    await this._transport.send(buildCommitMessage(), signal);
+    const msg = buildCommitRequest(this._sessionId);
+    await this._transport.sendProto(msg, signal);
 
-    const data = await this._transport.receive(signal);
-    const frame = parseFrame(data);
+    const response = await this._transport.receiveProto(signal);
 
-    if (isErrorFrame(frame)) {
-      throw frameToError(frame);
+    if (!response.commit) {
+      throw new TransportError({
+        operation: 'commit',
+        cause: new Error('Invalid COMMIT response'),
+      });
+    }
+
+    if (!response.commit.success) {
+      throw new DriverError({
+        statusClass: StatusClass.TRANSACTION_STATE,
+        subclass: '000',
+        code: 'CommitFailed',
+        message: 'Commit failed',
+      });
     }
 
     this._inTransaction = false;
@@ -445,13 +573,16 @@ export class Connection {
    * Rollback the current transaction (internal).
    */
   async _rollback(signal?: AbortSignal): Promise<void> {
-    await this._transport.send(buildRollbackMessage(), signal);
+    const msg = buildRollbackRequest(this._sessionId);
+    await this._transport.sendProto(msg, signal);
 
-    const data = await this._transport.receive(signal);
-    const frame = parseFrame(data);
+    const response = await this._transport.receiveProto(signal);
 
-    if (isErrorFrame(frame)) {
-      throw frameToError(frame);
+    if (!response.rollback) {
+      throw new TransportError({
+        operation: 'rollback',
+        cause: new Error('Invalid ROLLBACK response'),
+      });
     }
 
     this._inTransaction = false;
@@ -464,13 +595,25 @@ export class Connection {
   async _savepoint(name: string, signal?: AbortSignal): Promise<void> {
     validateSavepointName(name);
 
-    await this._transport.send(buildSavepointMessage(name), signal);
+    const msg = buildSavepointRequest(name, this._sessionId);
+    await this._transport.sendProto(msg, signal);
 
-    const data = await this._transport.receive(signal);
-    const frame = parseFrame(data);
+    const response = await this._transport.receiveProto(signal);
 
-    if (isErrorFrame(frame)) {
-      throw frameToError(frame);
+    if (!response.savepoint) {
+      throw new TransportError({
+        operation: 'savepoint',
+        cause: new Error('Invalid SAVEPOINT response'),
+      });
+    }
+
+    if (!response.savepoint.success) {
+      throw new DriverError({
+        statusClass: StatusClass.TRANSACTION_STATE,
+        subclass: '000',
+        code: 'SavepointFailed',
+        message: `Failed to create savepoint: ${name}`,
+      });
     }
   }
 
@@ -480,13 +623,25 @@ export class Connection {
   async _rollbackTo(name: string, signal?: AbortSignal): Promise<void> {
     validateSavepointName(name);
 
-    await this._transport.send(buildRollbackToMessage(name), signal);
+    const msg = buildRollbackToRequest(name, this._sessionId);
+    await this._transport.sendProto(msg, signal);
 
-    const data = await this._transport.receive(signal);
-    const frame = parseFrame(data);
+    const response = await this._transport.receiveProto(signal);
 
-    if (isErrorFrame(frame)) {
-      throw frameToError(frame);
+    if (!response.rollbackTo) {
+      throw new TransportError({
+        operation: 'rollback_to',
+        cause: new Error('Invalid ROLLBACK TO response'),
+      });
+    }
+
+    if (!response.rollbackTo.success) {
+      throw new DriverError({
+        statusClass: StatusClass.TRANSACTION_STATE,
+        subclass: '000',
+        code: 'RollbackToFailed',
+        message: `Failed to rollback to savepoint: ${name}`,
+      });
     }
   }
 
@@ -498,13 +653,23 @@ export class Connection {
       throw ErrClosed;
     }
 
-    await this._transport.send(buildPingMessage(), signal);
+    const msg = buildPingRequest();
+    await this._transport.sendProto(msg, signal);
 
-    const data = await this._transport.receive(signal);
-    const frame = parseFrame(data);
+    const response = await this._transport.receiveProto(signal);
 
-    if (isErrorFrame(frame)) {
-      throw frameToError(frame);
+    if (!response.ping) {
+      throw new TransportError({
+        operation: 'ping',
+        cause: new Error('Invalid PING response'),
+      });
+    }
+
+    if (!response.ping.ok) {
+      throw new TransportError({
+        operation: 'ping',
+        cause: new Error('Server returned not ok'),
+      });
     }
   }
 
@@ -546,22 +711,14 @@ export class Connection {
 
   /**
    * Create a prepared statement.
-   *
-   * @param query - Query text with parameters
-   * @returns Prepared statement
    */
   async prepare(query: string): Promise<PreparedStatement> {
-    // Dynamic import to avoid circular dependencies
     const { PreparedStatement } = await import('./prepared.js');
     return new PreparedStatement(this, query);
   }
 
   /**
    * Get the query execution plan without executing.
-   *
-   * @param query - Query to explain
-   * @param options - Options including parameters
-   * @returns Query execution plan
    */
   async explain(query: string, options?: ExplainOptions): Promise<QueryPlan> {
     const { explain: doExplain } = await import('./explain.js');
@@ -570,10 +727,6 @@ export class Connection {
 
   /**
    * Execute a query with profiling.
-   *
-   * @param query - Query to profile
-   * @param options - Options including parameters
-   * @returns Query execution profile
    */
   async profile(query: string, options?: ExplainOptions): Promise<QueryProfile> {
     const { profile: doProfile } = await import('./explain.js');
@@ -582,10 +735,6 @@ export class Connection {
 
   /**
    * Execute multiple queries in a batch.
-   *
-   * @param queries - Array of queries to execute
-   * @param options - Batch execution options
-   * @returns Batch execution summary
    */
   async batch(queries: BatchQuery[], options?: BatchOptions): Promise<BatchSummary> {
     const { batch: doBatch } = await import('./batch.js');

@@ -398,7 +398,9 @@ describe('query-builder', () => {
     });
 
     it('should safely handle array values with special characters', () => {
-      const n = node().label('Test').props({ items: ["a'b", "c\\d"] });
+      const n = node()
+        .label('Test')
+        .props({ items: ["a'b", 'c\\d'] });
       const result = n.toGQL();
       expect(result).toContain("'a\\'b'");
       expect(result).toContain("'c\\\\d'");

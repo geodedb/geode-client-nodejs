@@ -2,12 +2,14 @@
  * Geode Client Configuration
  *
  * DSN parsing and configuration management.
+ * Supports quic:// and grpc:// transport schemes.
  */
 
 import { ConfigError } from './errors.js';
 
 // Default configuration values
 export const DEFAULT_PORT = 3141;
+export const DEFAULT_GRPC_PORT = 50051;
 export const DEFAULT_PAGE_SIZE = 1000;
 export const DEFAULT_HELLO_NAME = 'geode-nodejs';
 export const DEFAULT_HELLO_VERSION = '1.0.0';
@@ -16,6 +18,17 @@ export const MAX_QUERY_LENGTH = 1 << 20; // 1MB
 export const MAX_PAGE_SIZE = 100000;
 export const MIN_PORT = 1;
 export const MAX_PORT = 65535;
+
+/**
+ * Transport type for client connections.
+ */
+export type TransportType = 'quic' | 'grpc';
+
+/**
+ * Supported DSN schemes.
+ */
+export const SUPPORTED_SCHEMES = ['quic', 'grpc', 'grcp', 'geode'] as const;
+export type DSNScheme = (typeof SUPPORTED_SCHEMES)[number];
 
 /**
  * Validate that a port number is within valid TCP/UDP range.
@@ -31,8 +44,11 @@ export interface GeodeConfig {
   /** Server hostname or IP address */
   host: string;
 
-  /** Server port (default: 3141) */
+  /** Server port (default: 3141 for QUIC, 50051 for gRPC) */
   port: number;
+
+  /** Transport type (default: 'quic') */
+  transport: TransportType;
 
   /** Number of rows per page (default: 1000) */
   pageSize: number;
@@ -89,6 +105,10 @@ export interface GeodeConfig {
 
   /** Maximum idle time in milliseconds (default: 30000) */
   maxIdleTime?: number;
+
+  // gRPC-specific options
+  /** Enable TLS for gRPC (default: true) */
+  tls?: boolean;
 }
 
 /**
@@ -115,6 +135,7 @@ export function defaultConfig(): GeodeConfig {
   return {
     host: 'localhost',
     port: DEFAULT_PORT,
+    transport: 'quic',
     pageSize: DEFAULT_PAGE_SIZE,
     helloName: DEFAULT_HELLO_NAME,
     helloVersion: DEFAULT_HELLO_VERSION,
@@ -123,6 +144,7 @@ export function defaultConfig(): GeodeConfig {
     requestTimeout: 120000,
     keepAliveInterval: 10000,
     maxIdleTime: 30000,
+    tls: true,
   };
 }
 
@@ -130,9 +152,11 @@ export function defaultConfig(): GeodeConfig {
  * Parse a DSN (Data Source Name) string into configuration.
  *
  * Supported formats:
- *   - geode://host:port?options
- *   - geode://username:password@host:port?options
- *   - host:port?options
+ *   - quic://host:port?options (QUIC transport, default)
+ *   - grpc://host:port?options (gRPC transport)
+ *   - grcp://host:port?options (gRPC alias, deprecated)
+ *   - geode://host:port?options (legacy, defaults to QUIC)
+ *   - host:port?options (defaults to QUIC)
  *   - host:port
  *   - host (uses default port)
  *
@@ -147,6 +171,7 @@ export function defaultConfig(): GeodeConfig {
  *   - cert: Path to client certificate (for mTLS)
  *   - key: Path to client key (for mTLS)
  *   - insecure: Skip TLS verification (testing only)
+ *   - tls: Enable/disable TLS for gRPC (default: true)
  *   - server_name: SNI server name
  *   - connect_timeout: Connection timeout in ms
  *   - request_timeout: Request timeout in ms
@@ -157,6 +182,7 @@ export function defaultConfig(): GeodeConfig {
  *   - GEODE_TLS_CA: Default CA certificate path
  *   - GEODE_USERNAME: Default username
  *   - GEODE_PASSWORD: Default password
+ *   - GEODE_TRANSPORT: Default transport type (quic or grpc)
  */
 export function parseDSN(dsn: string): GeodeConfig {
   // CANARY: REQ=REQ-CLIENT-NODEJS-001; FEATURE="NodejsClientConnect"; ASPECT=DSNParse; STATUS=IMPL; OWNER=clients; UPDATED=2025-02-14
@@ -181,28 +207,80 @@ export function parseDSN(dsn: string): GeodeConfig {
   if (process.env['GEODE_PASSWORD']) {
     cfg.password = process.env['GEODE_PASSWORD'];
   }
+  if (process.env['GEODE_TRANSPORT']) {
+    const transport = process.env['GEODE_TRANSPORT'].toLowerCase();
+    if (transport === 'grpc' || transport === 'quic') {
+      cfg.transport = transport;
+    }
+  }
 
   dsn = dsn.trim();
   if (!dsn) {
     return cfg;
   }
 
-  // Check for geode:// URL scheme
-  if (dsn.startsWith('geode://')) {
-    return parseURLDSN(dsn, cfg);
+  // Extract scheme if present
+  const schemeMatch = dsn.match(/^([a-z]+):\/\//i);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1]!.toLowerCase();
+
+    // Check for unsupported schemes
+    if (!SUPPORTED_SCHEMES.includes(scheme as DSNScheme)) {
+      throw new ConfigError({
+        field: 'scheme',
+        value: scheme,
+        message: `unsupported scheme '${scheme}'. Supported schemes: ${SUPPORTED_SCHEMES.join(', ')}`,
+      });
+    }
+
+    return parseURLDSN(dsn, cfg, scheme as DSNScheme);
   }
 
-  // Parse as host:port?options
+  // Parse as host:port?options (default to QUIC)
   return parseSimpleDSN(dsn, cfg);
 }
 
 /**
- * Parse a geode:// URL format DSN.
+ * Determine transport type from scheme.
  */
-function parseURLDSN(dsn: string, cfg: GeodeConfig): GeodeConfig {
+function schemeToTransport(scheme: DSNScheme): TransportType {
+  switch (scheme) {
+    case 'grpc':
+    case 'grcp': // Alias with deprecation warning
+      return 'grpc';
+    case 'quic':
+    case 'geode':
+    default:
+      return 'quic';
+  }
+}
+
+/**
+ * Get default port for transport type.
+ */
+function getDefaultPortForTransport(transport: TransportType): number {
+  return transport === 'grpc' ? DEFAULT_GRPC_PORT : DEFAULT_PORT;
+}
+
+/**
+ * Parse a URL format DSN (quic://, grpc://, geode://).
+ */
+function parseURLDSN(dsn: string, cfg: GeodeConfig, scheme: DSNScheme): GeodeConfig {
+  // Emit deprecation warning for grcp:// alias
+  if (scheme === 'grcp') {
+    // eslint-disable-next-line no-console -- Intentional deprecation warning
+    console.warn('DEPRECATION WARNING: The grcp:// scheme is deprecated. Use grpc:// instead.');
+  }
+
+  // Set transport based on scheme
+  cfg.transport = schemeToTransport(scheme);
+
+  // For URL parsing, normalize the scheme to a standard one
+  const normalizedDsn = dsn.replace(/^[a-z]+:\/\//i, 'http://');
+
   let url: URL;
   try {
-    url = new URL(dsn);
+    url = new URL(normalizedDsn);
   } catch {
     throw new ConfigError({
       field: 'dsn',
@@ -218,7 +296,8 @@ function parseURLDSN(dsn: string, cfg: GeodeConfig): GeodeConfig {
     });
   }
 
-  cfg.host = url.hostname;
+  // Strip brackets from IPv6 addresses (URL class includes them)
+  cfg.host = url.hostname.replace(/^\[/, '').replace(/\]$/, '');
 
   if (url.port) {
     const port = parseInt(url.port, 10);
@@ -230,6 +309,9 @@ function parseURLDSN(dsn: string, cfg: GeodeConfig): GeodeConfig {
       });
     }
     cfg.port = port;
+  } else {
+    // Use transport-specific default port
+    cfg.port = getDefaultPortForTransport(cfg.transport);
   }
 
   // Parse credentials from URL
@@ -414,6 +496,10 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
         cfg.insecureSkipVerify = value === 'true' || value === '1';
         break;
 
+      case 'tls':
+        cfg.tls = value !== 'false' && value !== '0';
+        break;
+
       case 'server_name':
         cfg.serverName = value;
         break;
@@ -439,7 +525,7 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
   }
 
   // Validate mTLS configuration - XOR: one but not both
-   
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- Using logical OR for XOR check, not nullish fallback
   if ((cfg.tlsCert && !cfg.tlsKey) || (!cfg.tlsCert && cfg.tlsKey)) {
     throw new ConfigError({
       field: 'tls',
@@ -510,11 +596,11 @@ export function cloneConfig(cfg: GeodeConfig): GeodeConfig {
  *
  * @example
  * ```typescript
- * redactDSN('geode://admin:secret@localhost:3141')
- * // Returns: 'geode://***:***@localhost:3141'
+ * redactDSN('quic://admin:secret@localhost:3141')
+ * // Returns: 'quic://***:***@localhost:3141'
  *
- * redactDSN('localhost:3141?username=admin&password=secret')
- * // Returns: 'localhost:3141?username=***&password=***'
+ * redactDSN('grpc://localhost:50051?username=admin&password=secret')
+ * // Returns: 'grpc://localhost:50051?username=***&password=***'
  * ```
  */
 export function redactDSN(dsn: string): string {
@@ -522,10 +608,14 @@ export function redactDSN(dsn: string): string {
     return dsn;
   }
 
-  // Handle geode:// URL format
-  if (dsn.startsWith('geode://')) {
+  // Handle URL format (quic://, grpc://, geode://)
+  const schemeMatch = dsn.match(/^([a-z]+):\/\//i);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1]!;
     try {
-      const url = new URL(dsn);
+      // Normalize to http:// for URL parsing, then restore original scheme
+      const normalizedDsn = dsn.replace(/^[a-z]+:\/\//i, 'http://');
+      const url = new URL(normalizedDsn);
 
       // Redact username and password in URL
       if (url.username) {
@@ -549,7 +639,8 @@ export function redactDSN(dsn: string): string {
         url.searchParams.set('user', '***');
       }
 
-      return url.toString();
+      // Restore original scheme
+      return url.toString().replace(/^http:\/\//, `${scheme}://`);
     } catch {
       // If URL parsing fails, fall through to string-based redaction
     }

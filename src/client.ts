@@ -14,11 +14,7 @@ import type { PreparedStatement } from './prepared.js';
 import type { QueryPlan, QueryProfile, ExplainOptions } from './explain.js';
 import type { BatchQuery, BatchSummary, BatchOptions } from './batch.js';
 import type { AuthClient } from './auth.js';
-import {
-  validateLabel,
-  validatePropertyName,
-  validateRelationshipType,
-} from './validate.js';
+import { validateLabel, validatePropertyName, validateRelationshipType } from './validate.js';
 
 /**
  * Client configuration options.

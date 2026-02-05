@@ -102,7 +102,14 @@ export class TransportError extends Error implements GeodeError {
  * Configuration/DSN parsing error.
  */
 // Fields that should never have their values included in error messages
-const SENSITIVE_CONFIG_FIELDS = new Set(['password', 'pass', 'key', 'secret', 'token', 'credential']);
+const SENSITIVE_CONFIG_FIELDS = new Set([
+  'password',
+  'pass',
+  'key',
+  'secret',
+  'token',
+  'credential',
+]);
 
 export class ConfigError extends Error implements GeodeError {
   readonly statusClass = StatusClass.INVALID_PARAM;

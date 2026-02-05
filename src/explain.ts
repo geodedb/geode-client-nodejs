@@ -1,19 +1,18 @@
 /**
  * Query Explain and Profile
  *
- * Support for query plan analysis and execution profiling.
+ * Support for query plan analysis and execution profiling using protobuf protocol.
  */
 
 import type { Connection, QueryOptions } from './connection.js';
 import { validateQuery, validateParamValue } from './validate.js';
+import { DriverError, TransportError, StatusClass } from './errors.js';
 import {
-  buildRunGQLMessage,
-  parseFrame,
-  isErrorFrame,
-  frameToError,
-  rewritePlaceholders,
-  RespType,
-} from './protocol.js';
+  buildExecuteRequest,
+  type ExecutionResponse,
+  type ExplainPayload,
+  type ProfilePayload,
+} from './proto.js';
 
 /**
  * A single operation in a query plan.
@@ -98,97 +97,61 @@ export interface ExplainOptions extends Omit<QueryOptions, 'pageSize'> {
 }
 
 /**
- * Parse plan data from server response.
+ * Parse plan data from ExplainPayload.
  */
-function parsePlanOperation(data: unknown): PlanOperation {
-  if (!data || typeof data !== 'object') {
-    return { type: 'Unknown', details: { raw: data } };
+function parseExplainPayload(payload: ExplainPayload): PlanOperation {
+  const ops = payload.ops ?? [];
+  if (ops.length === 0) {
+    return { type: 'Unknown', details: { schema: payload.schema } };
   }
 
-  const obj = data as Record<string, unknown>;
-
-  const op: PlanOperation = {
-    type: (obj['type'] as string) || (obj['operator'] as string) || 'Unknown',
+  // Build operation tree
+  const root: PlanOperation = {
+    type: 'Query',
+    details: { schema: payload.schema },
+    children: ops.map((op: unknown) => {
+      const opObj = op as Record<string, unknown>;
+      return {
+        type: (opObj['kind'] as string) || 'Unknown',
+        cost: opObj['cost'] as number | undefined,
+        rows: opObj['est_rows'] as number | undefined,
+        details: { idx: opObj['idx'] },
+      };
+    }),
   };
 
-  if ('operator' in obj) op.operator = obj['operator'] as string;
-  if ('cost' in obj) op.cost = obj['cost'] as number;
-  if ('rows' in obj) op.rows = obj['rows'] as number;
-  if ('estimated_rows' in obj) op.rows = obj['estimated_rows'] as number;
-  if ('estimated_cost' in obj) op.cost = obj['estimated_cost'] as number;
-
-  // Collect remaining fields as details
-  const details: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (
-      ![
-        'type',
-        'operator',
-        'cost',
-        'rows',
-        'children',
-        'estimated_rows',
-        'estimated_cost',
-      ].includes(key)
-    ) {
-      details[key] = value;
-    }
-  }
-  if (Object.keys(details).length > 0) {
-    op.details = details;
-  }
-
-  // Parse children
-  if (Array.isArray(obj['children'])) {
-    op.children = (obj['children'] as unknown[]).map(parsePlanOperation);
-  }
-
-  return op;
+  return root;
 }
 
 /**
- * Parse timing data from server response.
+ * Parse profile data from ProfilePayload.
  */
-function parseOperationTiming(data: unknown): OperationTiming {
-  if (!data || typeof data !== 'object') {
+function parseProfilePayload(payload: ProfilePayload): OperationTiming {
+  const ops = payload.ops ?? [];
+  if (ops.length === 0) {
     return { type: 'Unknown', wallTimeMs: 0 };
   }
 
-  const obj = data as Record<string, unknown>;
+  // Build timing tree
+  const children: OperationTiming[] = ops.map((op: unknown) => {
+    const opObj = op as Record<string, unknown>;
+    return {
+      type: (opObj['op'] as string) || 'Unknown',
+      wallTimeMs: Number(opObj['time_ns'] ?? 0) / 1_000_000,
+      cpuTimeMs: Number(opObj['cpu_time_ns'] ?? 0) / 1_000_000,
+      rows: Number(opObj['rows'] ?? 0),
+    };
+  });
 
-  const timing: OperationTiming = {
-    type: (obj['type'] as string) || (obj['operator'] as string) || 'Unknown',
-    wallTimeMs: (obj['wall_time_ms'] as number) || (obj['time_ms'] as number) || 0,
+  return {
+    type: 'Query',
+    wallTimeMs: Number(payload.totalTimeNs ?? 0) / 1_000_000,
+    children,
   };
-
-  if ('cpu_time_ms' in obj) timing.cpuTimeMs = obj['cpu_time_ms'] as number;
-  if ('rows' in obj) timing.rows = obj['rows'] as number;
-  if ('actual_rows' in obj) timing.rows = obj['actual_rows'] as number;
-  if ('page_hits' in obj) timing.pageHits = obj['page_hits'] as number;
-  if ('page_faults' in obj) timing.pageFaults = obj['page_faults'] as number;
-
-  // Parse children
-  if (Array.isArray(obj['children'])) {
-    timing.children = (obj['children'] as unknown[]).map(parseOperationTiming);
-  }
-
-  return timing;
 }
 
 /**
  * Get the query execution plan without executing.
- *
- * @param conn - Connection to use
- * @param query - Query to explain
- * @param options - Options including parameters
- * @returns Query execution plan
- *
- * @example
- * ```typescript
- * const plan = await explain(conn, 'MATCH (n:Person)-[:KNOWS]->(m) RETURN n, m');
- * console.log('Plan:', plan.root.type);
- * console.log('Estimated cost:', plan.totalCost);
- * ```
  */
 export async function explain(
   conn: Connection,
@@ -197,15 +160,7 @@ export async function explain(
 ): Promise<QueryPlan> {
   validateQuery(query);
 
-  let finalQuery = query;
-  let params = options?.params ?? {};
-
-  // Handle positional parameters
-  if (query.includes('?') && Array.isArray(options?.params)) {
-    const result = rewritePlaceholders(query, options.params as unknown[]);
-    finalQuery = result.query;
-    params = result.params;
-  }
+  const params = options?.params ?? {};
 
   // Validate parameters
   for (const [_key, value] of Object.entries(params)) {
@@ -213,63 +168,64 @@ export async function explain(
   }
 
   // Build EXPLAIN query
-  const explainQuery = options?.verbose ? `EXPLAIN VERBOSE ${finalQuery}` : `EXPLAIN ${finalQuery}`;
+  const explainQuery = options?.verbose ? `EXPLAIN VERBOSE ${query}` : `EXPLAIN ${query}`;
 
-  const transport = (
-    conn as unknown as {
-      _transport: {
-        send: (msg: unknown, signal?: AbortSignal) => Promise<void>;
-        receive: (signal?: AbortSignal) => Promise<Buffer>;
-      };
-    }
-  )._transport;
+  // Access private transport through connection
+  const connInternal = conn as unknown as {
+    _transport: {
+      sendProto: (msg: unknown, signal?: AbortSignal) => Promise<void>;
+      receiveProto: (signal?: AbortSignal) => Promise<{ execute?: ExecutionResponse }>;
+    };
+    _sessionId: string;
+  };
 
-  await transport.send(buildRunGQLMessage(explainQuery, params), options?.signal);
+  const msg = buildExecuteRequest(connInternal._sessionId, explainQuery, params);
+  await connInternal._transport.sendProto(msg, options?.signal);
 
-  const data = await transport.receive(options?.signal);
-  const frame = parseFrame(data);
+  const response = await connInternal._transport.receiveProto(options?.signal);
 
-  if (isErrorFrame(frame)) {
-    throw frameToError(frame);
+  if (!response.execute) {
+    throw new TransportError({
+      operation: 'explain',
+      cause: new Error('Invalid execute response'),
+    });
+  }
+
+  const execResp = response.execute;
+
+  if (execResp.error) {
+    throw new DriverError({
+      statusClass: (execResp.status?.statusClass ??
+        StatusClass.SYSTEM) as typeof StatusClass.SYSTEM,
+      subclass: '000',
+      code: execResp.error.code ?? 'UnknownError',
+      message: execResp.error.message ?? 'Unknown error',
+      anchor: execResp.error.anchor,
+    });
   }
 
   // Check for EXPLAIN response
-  if (frame.result.type === RespType.EXPLAIN) {
-    const raw = frame.result.json;
-    const root = parsePlanOperation(raw);
+  if (execResp.explain) {
+    const payload = execResp.explain;
+    const root = parseExplainPayload(payload);
 
     return {
       root,
-      totalCost: calculateTotalCost(root),
-      totalRows: root.rows,
-      raw,
+      totalCost: payload.totals?.cost,
+      totalRows: payload.totals?.est_rows,
+      raw: payload,
     };
   }
 
   // Fallback: return raw data as plan
   return {
-    root: { type: 'Unknown', details: { response: frame.result } },
-    raw: frame.result,
+    root: { type: 'Unknown', details: { response: execResp } },
+    raw: execResp,
   };
 }
 
 /**
  * Execute a query with profiling and return execution statistics.
- *
- * Unlike explain(), profile() actually executes the query and measures
- * real performance metrics.
- *
- * @param conn - Connection to use
- * @param query - Query to profile
- * @param options - Options including parameters
- * @returns Query execution profile
- *
- * @example
- * ```typescript
- * const profile = await profile(conn, 'MATCH (n:Person) RETURN count(n)');
- * console.log('Execution time:', profile.totalTimeMs, 'ms');
- * console.log('Rows processed:', profile.totalRows);
- * ```
  */
 export async function profile(
   conn: Connection,
@@ -278,15 +234,7 @@ export async function profile(
 ): Promise<QueryProfile> {
   validateQuery(query);
 
-  let finalQuery = query;
-  let params = options?.params ?? {};
-
-  // Handle positional parameters
-  if (query.includes('?') && Array.isArray(options?.params)) {
-    const result = rewritePlaceholders(query, options.params as unknown[]);
-    finalQuery = result.query;
-    params = result.params;
-  }
+  const params = options?.params ?? {};
 
   // Validate parameters
   for (const [_key, value] of Object.entries(params)) {
@@ -294,39 +242,53 @@ export async function profile(
   }
 
   // Build PROFILE query
-  const profileQuery = options?.verbose ? `PROFILE VERBOSE ${finalQuery}` : `PROFILE ${finalQuery}`;
+  const profileQuery = options?.verbose ? `PROFILE VERBOSE ${query}` : `PROFILE ${query}`;
 
-  const transport = (
-    conn as unknown as {
-      _transport: {
-        send: (msg: unknown, signal?: AbortSignal) => Promise<void>;
-        receive: (signal?: AbortSignal) => Promise<Buffer>;
-      };
-    }
-  )._transport;
+  // Access private transport through connection
+  const connInternal = conn as unknown as {
+    _transport: {
+      sendProto: (msg: unknown, signal?: AbortSignal) => Promise<void>;
+      receiveProto: (signal?: AbortSignal) => Promise<{ execute?: ExecutionResponse }>;
+    };
+    _sessionId: string;
+  };
 
-  await transport.send(buildRunGQLMessage(profileQuery, params), options?.signal);
+  const msg = buildExecuteRequest(connInternal._sessionId, profileQuery, params);
+  await connInternal._transport.sendProto(msg, options?.signal);
 
-  const data = await transport.receive(options?.signal);
-  const frame = parseFrame(data);
+  const response = await connInternal._transport.receiveProto(options?.signal);
 
-  if (isErrorFrame(frame)) {
-    throw frameToError(frame);
+  if (!response.execute) {
+    throw new TransportError({
+      operation: 'profile',
+      cause: new Error('Invalid execute response'),
+    });
+  }
+
+  const execResp = response.execute;
+
+  if (execResp.error) {
+    throw new DriverError({
+      statusClass: (execResp.status?.statusClass ??
+        StatusClass.SYSTEM) as typeof StatusClass.SYSTEM,
+      subclass: '000',
+      code: execResp.error.code ?? 'UnknownError',
+      message: execResp.error.message ?? 'Unknown error',
+      anchor: execResp.error.anchor,
+    });
   }
 
   // Check for PROFILE response
-  if (frame.result.type === RespType.PROFILE) {
-    const raw = frame.result.json as Record<string, unknown> | undefined;
-    const root = parseOperationTiming(raw);
+  if (execResp.profile) {
+    const payload = execResp.profile;
+    const root = parseProfilePayload(payload);
 
     return {
       root,
-      totalTimeMs: calculateTotalTime(root),
+      totalTimeMs: Number(payload.totalTimeNs ?? 0) / 1_000_000,
       totalRows: root.rows,
-      planningTimeMs: raw?.['planning_time_ms'] as number | undefined,
-      executionTimeMs: raw?.['execution_time_ms'] as number | undefined,
-      memoryBytes: raw?.['memory_bytes'] as number | undefined,
-      raw,
+      memoryBytes: Number(payload.memory?.peakBytes ?? 0),
+      raw: payload,
     };
   }
 
@@ -334,34 +296,8 @@ export async function profile(
   return {
     root: { type: 'Unknown', wallTimeMs: 0 },
     totalTimeMs: 0,
-    raw: frame.result,
+    raw: execResp,
   };
-}
-
-/**
- * Calculate total cost from a plan tree.
- */
-function calculateTotalCost(op: PlanOperation): number {
-  let total = op.cost ?? 0;
-  if (op.children) {
-    for (const child of op.children) {
-      total += calculateTotalCost(child);
-    }
-  }
-  return total;
-}
-
-/**
- * Calculate total time from a timing tree.
- */
-function calculateTotalTime(timing: OperationTiming): number {
-  let total = timing.wallTimeMs;
-  if (timing.children) {
-    for (const child of timing.children) {
-      total = Math.max(total, calculateTotalTime(child));
-    }
-  }
-  return total;
 }
 
 /**

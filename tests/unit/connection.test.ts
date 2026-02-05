@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Connection } from '../../src/connection.js';
 import { MockTransport } from '../../src/transport.js';
-import { RespType } from '../../src/protocol.js';
+import type { QuicServerMessage } from '../../src/proto.js';
 
 describe('Connection', () => {
   let transport: MockTransport;
@@ -11,11 +11,12 @@ describe('Connection', () => {
     transport = new MockTransport();
 
     // Queue HELLO response
-    transport.queueResponse({
-      status_class: '00000',
-      status_subclass: '000',
-      result: {
-        type: RespType.STATUS,
+    transport.queueProtoResponse({
+      hello: {
+        success: true,
+        sessionId: 'test-session-123',
+        errorMessage: '',
+        capabilities: ['gql', 'transactions'],
       },
     });
 
@@ -24,6 +25,11 @@ describe('Connection', () => {
         host: 'localhost',
         port: 3141,
         pageSize: 100,
+        transport: 'quic',
+        helloName: 'test-client',
+        helloVersion: '1.0.0',
+        conformance: 'min',
+        tls: true,
       },
       transport
     );
@@ -31,24 +37,28 @@ describe('Connection', () => {
 
   describe('query', () => {
     it('should execute simple query and return result', async () => {
-      // Queue SCHEMA response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.SCHEMA,
-          columns: [{ name: 'num', type: 'INT64' }],
+      // Queue SCHEMA response (execute with schema)
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'num', type: 'INT64' }],
+          },
         },
       });
 
-      // Queue BINDINGS response (after PULL)
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.BINDINGS,
-          rows: [{ num: 42 }],
-          final: true,
+      // Queue DATA PAGE response (execute with page, after PULL)
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [
+              {
+                values: [{ intVal: { value: 42, kind: 1 } }],
+              },
+            ],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
         },
       });
 
@@ -63,23 +73,27 @@ describe('Connection', () => {
 
     it('should handle inline BINDINGS frame (no PULL needed)', async () => {
       // Queue SCHEMA response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.SCHEMA,
-          columns: [{ name: 'result', type: 'STRING' }],
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'result', type: 'STRING' }],
+          },
         },
       });
 
-      // Queue BINDINGS response immediately (inline)
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.BINDINGS,
-          rows: [{ result: 'hello' }],
-          final: true,
+      // Queue DATA PAGE response immediately (inline)
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [
+              {
+                values: [{ stringVal: { value: 'hello', kind: 1 } }],
+              },
+            ],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
         },
       });
 
@@ -92,13 +106,20 @@ describe('Connection', () => {
 
     it('should handle query error from server', async () => {
       // Queue ERROR response
-      transport.queueResponse({
-        status_class: '42000',
-        status_subclass: '000',
-        result: {
-          type: RespType.ERROR,
-          code: 'SyntaxError',
-          message: 'Unexpected token',
+      transport.queueProtoResponse({
+        execute: {
+          status: {
+            statusClass: '42000',
+            statusSubclass: '000',
+            additionalStatuses: [],
+            flaggerFindings: [],
+          },
+          error: {
+            code: 'SyntaxError',
+            message: 'Unexpected token',
+            type: 'SyntaxError',
+            anchor: '',
+          },
         },
       });
 
@@ -109,23 +130,27 @@ describe('Connection', () => {
   describe('queryAll', () => {
     it('should return all rows as array', async () => {
       // Queue SCHEMA response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.SCHEMA,
-          columns: [{ name: 'n', type: 'INT64' }],
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'n', type: 'INT64' }],
+          },
         },
       });
 
-      // Queue BINDINGS response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.BINDINGS,
-          rows: [{ n: 1 }, { n: 2 }, { n: 3 }],
-          final: true,
+      // Queue DATA PAGE response
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [
+              { values: [{ intVal: { value: 1, kind: 1 } }] },
+              { values: [{ intVal: { value: 2, kind: 1 } }] },
+              { values: [{ intVal: { value: 3, kind: 1 } }] },
+            ],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
         },
       });
 
@@ -142,23 +167,35 @@ describe('Connection', () => {
       // This was the specific failing case reported in the bug
 
       // Queue SCHEMA response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.SCHEMA,
-          columns: [{ name: 'n', type: 'NODE' }],
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'n', type: 'NODE' }],
+          },
         },
       });
 
-      // Queue BINDINGS response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.BINDINGS,
-          rows: [{ n: { id: '1', labels: ['Test'] } }],
-          final: true,
+      // Queue DATA PAGE response with node value
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [
+              {
+                values: [
+                  {
+                    nodeVal: {
+                      id: 1,
+                      labels: ['Test'],
+                      properties: [],
+                    },
+                  },
+                ],
+              },
+            ],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
         },
       });
 
@@ -170,21 +207,20 @@ describe('Connection', () => {
     it('should not hang when no inline frame and PULL is required', async () => {
       // This tests the specific scenario where:
       // 1. SCHEMA is received
-      // 2. No inline BINDINGS (timeout fires)
+      // 2. No inline DATA PAGE (timeout fires)
       // 3. PULL is sent
-      // 4. BINDINGS is received
+      // 4. DATA PAGE is received
 
       // Queue SCHEMA response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.SCHEMA,
-          columns: [{ name: 'value', type: 'STRING' }],
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'value', type: 'STRING' }],
+          },
         },
       });
 
-      // Don't queue BINDINGS yet - simulate delay
+      // Don't queue DATA PAGE yet - simulate delay
 
       // Start queryAll (non-blocking)
       const queryPromise = connection.queryAll('MATCH (n) RETURN n');
@@ -192,14 +228,19 @@ describe('Connection', () => {
       // Wait for SCHEMA to be processed and inline check to timeout
       await new Promise((r) => setTimeout(r, 50));
 
-      // Now queue BINDINGS (after PULL would have been sent)
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.BINDINGS,
-          rows: [{ value: 'data' }],
-          final: true,
+      // Now queue DATA PAGE (after PULL would have been sent)
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [
+              {
+                values: [{ stringVal: { value: 'data', kind: 1 } }],
+              },
+            ],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
         },
       });
 
@@ -212,12 +253,24 @@ describe('Connection', () => {
 
   describe('exec', () => {
     it('should execute statement without returning rows', async () => {
-      // Queue STATUS response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.STATUS,
+      // Queue SCHEMA response (CREATE typically returns empty schema + empty page)
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [],
+          },
+        },
+      });
+
+      // Queue empty DATA PAGE
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
         },
       });
 
@@ -225,24 +278,24 @@ describe('Connection', () => {
     });
 
     it('should handle SCHEMA response for exec (drains inline bindings)', async () => {
-      // Some exec statements return SCHEMA + BINDINGS
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.SCHEMA,
-          columns: [],
+      // Some exec statements return SCHEMA + DATA PAGE
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [],
+          },
         },
       });
 
-      // Queue empty BINDINGS
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.BINDINGS,
-          rows: [],
-          final: true,
+      // Queue empty DATA PAGE
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
         },
       });
 
@@ -252,11 +305,9 @@ describe('Connection', () => {
 
   describe('ping', () => {
     it('should ping successfully', async () => {
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.STATUS,
+      transport.queueProtoResponse({
+        ping: {
+          ok: true,
         },
       });
 
@@ -264,12 +315,9 @@ describe('Connection', () => {
     });
 
     it('should handle ping error', async () => {
-      transport.queueResponse({
-        status_class: '58000',
-        status_subclass: '000',
-        result: {
-          type: RespType.ERROR,
-          message: 'Server error',
+      transport.queueProtoResponse({
+        ping: {
+          ok: false,
         },
       });
 
@@ -280,11 +328,10 @@ describe('Connection', () => {
   describe('transaction', () => {
     it('should begin and commit transaction', async () => {
       // BEGIN response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.STATUS,
+      transport.queueProtoResponse({
+        begin: {
+          sessionId: 'test-session-123',
+          txId: 'tx-001',
         },
       });
 
@@ -292,11 +339,9 @@ describe('Connection', () => {
       expect(connection.inTransaction).toBe(true);
 
       // COMMIT response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.STATUS,
+      transport.queueProtoResponse({
+        commit: {
+          success: true,
         },
       });
 
@@ -306,22 +351,19 @@ describe('Connection', () => {
 
     it('should begin and rollback transaction', async () => {
       // BEGIN response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.STATUS,
+      transport.queueProtoResponse({
+        begin: {
+          sessionId: 'test-session-123',
+          txId: 'tx-002',
         },
       });
 
       const tx = await connection.begin();
 
       // ROLLBACK response
-      transport.queueResponse({
-        status_class: '00000',
-        status_subclass: '000',
-        result: {
-          type: RespType.STATUS,
+      transport.queueProtoResponse({
+        rollback: {
+          success: true,
         },
       });
 

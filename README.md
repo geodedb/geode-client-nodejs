@@ -1,16 +1,18 @@
 # Geode Node.js Client
 
-A high-performance Node.js client library for the [Geode](https://gitlab.com/devnw/geode) graph database, implementing the ISO/IEC 39075:2024 GQL standard over QUIC + TLS 1.3.
+A high-performance Node.js client library for the [Geode](https://gitlab.com/devnw/geode) graph database, implementing the ISO/IEC 39075:2024 GQL standard over QUIC or gRPC with TLS 1.3.
 
 ## Features
 
 - **Full GQL Support**: Implements ISO/IEC 39075:2024 Graph Query Language standard
-- **QUIC Transport**: High-performance transport with TLS 1.3 encryption
+- **Dual Transport**: QUIC (default) or gRPC transport with TLS 1.3 encryption
+- **Protobuf Wire Protocol**: Efficient binary serialization using Protocol Buffers
 - **Connection Pooling**: Efficient connection management for high-throughput applications
 - **Type Safety**: Full TypeScript support with comprehensive type definitions
 - **Query Builder**: Fluent API for building GQL queries programmatically
 - **Transaction Support**: Full transaction management with savepoints
 - **Async/Await**: Modern async API with proper cancellation support
+- **ESM Native**: Pure ESM package for modern Node.js applications
 
 ## Installation
 
@@ -44,8 +46,13 @@ await client.close();
 
 ### DSN Format
 
+The client supports multiple transport schemes:
+
 ```
-geode://[username:password@]host[:port][?options]
+quic://[username:password@]host[:port][?options]   # QUIC transport (default port: 3141)
+grpc://[username:password@]host[:port][?options]   # gRPC transport (default port: 50051)
+geode://[username:password@]host[:port][?options]  # Legacy scheme (uses QUIC)
+host:port                                          # Simple format (uses QUIC)
 ```
 
 ### Options
@@ -56,6 +63,7 @@ geode://[username:password@]host[:port][?options]
 | `hello_name`      | Client name                       | geode-nodejs |
 | `hello_ver`       | Client version                    | 1.0.0        |
 | `conformance`     | GQL conformance level             | min          |
+| `tls`             | Enable TLS (gRPC only)            | true         |
 | `insecure`        | Skip TLS verification (dev only)  | false        |
 | `ca`              | Path to CA certificate            | -            |
 | `cert`            | Path to client certificate (mTLS) | -            |
@@ -66,33 +74,43 @@ geode://[username:password@]host[:port][?options]
 
 ### Environment Variables
 
-| Variable         | Description                 |
-| ---------------- | --------------------------- |
-| `GEODE_HOST`     | Default host                |
-| `GEODE_PORT`     | Default port                |
-| `GEODE_TLS_CA`   | Default CA certificate path |
-| `GEODE_USERNAME` | Default username            |
-| `GEODE_PASSWORD` | Default password            |
+| Variable          | Description                    |
+| ----------------- | ------------------------------ |
+| `GEODE_HOST`      | Default host                   |
+| `GEODE_PORT`      | Default port                   |
+| `GEODE_TRANSPORT` | Default transport (quic/grpc)  |
+| `GEODE_TLS_CA`    | Default CA certificate path    |
+| `GEODE_USERNAME`  | Default username               |
+| `GEODE_PASSWORD`  | Default password               |
 
 ### Example Configurations
 
 ```typescript
-// Simple connection
+// Simple QUIC connection (default)
 const client = await createClient('localhost:3141');
 
-// With authentication
-const client = await createClient('geode://admin:secret@localhost:3141');
+// Explicit QUIC transport
+const client = await createClient('quic://localhost:3141');
 
-// With TLS
-const client = await createClient('geode://localhost:3141?ca=/path/to/ca.crt');
+// gRPC transport
+const client = await createClient('grpc://localhost:50051');
+
+// gRPC without TLS (development only)
+const client = await createClient('grpc://localhost:50051?tls=0');
+
+// With authentication
+const client = await createClient('quic://admin:secret@localhost:3141');
+
+// With TLS CA certificate
+const client = await createClient('quic://localhost:3141?ca=/path/to/ca.crt');
 
 // With mTLS
 const client = await createClient(
-  'geode://localhost:3141?ca=/path/to/ca.crt&cert=/path/to/client.crt&key=/path/to/client.key'
+  'quic://localhost:3141?ca=/path/to/ca.crt&cert=/path/to/client.crt&key=/path/to/client.key'
 );
 
 // With connection pool
-const client = await createClient('geode://localhost:3141', {
+const client = await createClient('quic://localhost:3141', {
   pooling: true,
   pool: {
     min: 2,

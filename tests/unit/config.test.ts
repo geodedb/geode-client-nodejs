@@ -6,6 +6,7 @@ import {
   getAddress,
   cloneConfig,
   DEFAULT_PORT,
+  DEFAULT_GRPC_PORT,
   DEFAULT_PAGE_SIZE,
   DEFAULT_HELLO_NAME,
   DEFAULT_HELLO_VERSION,
@@ -47,10 +48,12 @@ describe('config', () => {
 
       expect(cfg.host).toBe('localhost');
       expect(cfg.port).toBe(DEFAULT_PORT);
+      expect(cfg.transport).toBe('quic');
       expect(cfg.pageSize).toBe(DEFAULT_PAGE_SIZE);
       expect(cfg.helloName).toBe(DEFAULT_HELLO_NAME);
       expect(cfg.helloVersion).toBe(DEFAULT_HELLO_VERSION);
       expect(cfg.conformance).toBe(DEFAULT_CONFORMANCE);
+      expect(cfg.tls).toBe(true);
     });
   });
 
@@ -182,7 +185,91 @@ describe('config', () => {
       });
     });
 
+    describe('transport schemes', () => {
+      // Acceptance test case 1: DSN parse quic://localhost:1234
+      it('should parse quic:// URL with transport=quic', () => {
+        const cfg = parseDSN('quic://localhost:1234');
+
+        expect(cfg.transport).toBe('quic');
+        expect(cfg.host).toBe('localhost');
+        expect(cfg.port).toBe(1234);
+      });
+
+      // Acceptance test case 2: DSN parse grpc://127.0.0.1:50051?tls=0
+      it('should parse grpc:// URL with transport=grpc and tls disabled', () => {
+        const cfg = parseDSN('grpc://127.0.0.1:50051?tls=0');
+
+        expect(cfg.transport).toBe('grpc');
+        expect(cfg.host).toBe('127.0.0.1');
+        expect(cfg.port).toBe(50051);
+        expect(cfg.tls).toBe(false);
+      });
+
+      it('should parse quic:// with IPv6', () => {
+        const cfg = parseDSN('quic://[::1]:3141');
+
+        expect(cfg.transport).toBe('quic');
+        expect(cfg.host).toBe('::1');
+        expect(cfg.port).toBe(3141);
+      });
+
+      it('should parse grpc:// with query params', () => {
+        const cfg = parseDSN('grpc://myserver:50051?username=admin&tls=true');
+
+        expect(cfg.transport).toBe('grpc');
+        expect(cfg.host).toBe('myserver');
+        expect(cfg.port).toBe(50051);
+        expect(cfg.username).toBe('admin');
+        expect(cfg.tls).toBe(true);
+      });
+
+      it('should use default port for quic:// (3141)', () => {
+        const cfg = parseDSN('quic://localhost');
+
+        expect(cfg.transport).toBe('quic');
+        expect(cfg.port).toBe(DEFAULT_PORT);
+      });
+
+      it('should use default port for grpc:// (50051)', () => {
+        const cfg = parseDSN('grpc://localhost');
+
+        expect(cfg.transport).toBe('grpc');
+        expect(cfg.port).toBe(DEFAULT_GRPC_PORT);
+      });
+
+      it('should parse grcp:// as alias for grpc://', () => {
+        const cfg = parseDSN('grcp://localhost:50051');
+
+        expect(cfg.transport).toBe('grpc');
+        expect(cfg.host).toBe('localhost');
+        expect(cfg.port).toBe(50051);
+      });
+
+      it('should default to quic transport for geode:// scheme', () => {
+        const cfg = parseDSN('geode://localhost:3141');
+
+        expect(cfg.transport).toBe('quic');
+      });
+
+      it('should default to quic transport for simple DSN', () => {
+        const cfg = parseDSN('localhost:3141');
+
+        expect(cfg.transport).toBe('quic');
+      });
+    });
+
     describe('error cases', () => {
+      // Acceptance test case 3: DSN parse invalid http://localhost:1
+      it('should reject unsupported scheme', () => {
+        expect(() => parseDSN('http://localhost:1')).toThrow(ConfigError);
+        expect(() => parseDSN('http://localhost:1')).toThrow(/unsupported scheme/);
+      });
+
+      it('should reject other unsupported schemes', () => {
+        expect(() => parseDSN('https://localhost:1')).toThrow(ConfigError);
+        expect(() => parseDSN('tcp://localhost:1')).toThrow(ConfigError);
+        expect(() => parseDSN('ftp://localhost:1')).toThrow(ConfigError);
+      });
       it('should reject invalid URL format', () => {
         expect(() => parseDSN('geode://[invalid')).toThrow(ConfigError);
       });

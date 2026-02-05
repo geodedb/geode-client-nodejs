@@ -316,24 +316,20 @@ describe('validate', () => {
     describe('injection attack prevention', () => {
       it('should reject predicates with semicolons (statement injection)', () => {
         expect(() => validateRLSPredicate('true; DROP POLICY admin')).toThrow(SecurityError);
-        expect(() =>
-          validateRLSPredicate('n.x = 1; CREATE (m:Malicious)')
-        ).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('n.x = 1; CREATE (m:Malicious)')).toThrow(SecurityError);
       });
 
       it('should reject predicates with DDL keywords', () => {
-        expect(() =>
-          validateRLSPredicate('n.x = 1 CREATE (m:Malicious)')
-        ).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('n.x = 1 CREATE (m:Malicious)')).toThrow(SecurityError);
         expect(() => validateRLSPredicate('true DROP POLICY x')).toThrow(SecurityError);
         expect(() => validateRLSPredicate('n.x DELETE n')).toThrow(SecurityError);
         expect(() => validateRLSPredicate('n.y SET n.admin = true')).toThrow(SecurityError);
       });
 
       it('should reject predicates with MERGE keyword', () => {
-        expect(() =>
-          validateRLSPredicate('n.x MERGE (m:Admin {name: "attacker"})')
-        ).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('n.x MERGE (m:Admin {name: "attacker"})')).toThrow(
+          SecurityError
+        );
       });
 
       it('should reject predicates with policy manipulation keywords', () => {
@@ -373,15 +369,13 @@ describe('validate', () => {
       });
 
       it('should reject predicates with CALL keyword', () => {
-        expect(() =>
-          validateRLSPredicate('true CALL db.dropDatabase()')
-        ).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('true CALL db.dropDatabase()')).toThrow(SecurityError);
       });
 
       it('should reject predicates with LOAD keyword', () => {
-        expect(() =>
-          validateRLSPredicate('true LOAD CSV FROM "http://evil.com"')
-        ).toThrow(SecurityError);
+        expect(() => validateRLSPredicate('true LOAD CSV FROM "http://evil.com"')).toThrow(
+          SecurityError
+        );
       });
     });
 
@@ -471,7 +465,9 @@ describe('validate', () => {
       it('should reject paths with directory traversal (../)', () => {
         expect(() => validateTLSCertPath('../../../etc/passwd', 'tlsCA')).toThrow(SecurityError);
         expect(() => validateTLSCertPath('/etc/ssl/../passwd', 'tlsCA')).toThrow(SecurityError);
-        expect(() => validateTLSCertPath('certs/../../etc/shadow', 'tlsCert')).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('certs/../../etc/shadow', 'tlsCert')).toThrow(
+          SecurityError
+        );
       });
 
       it('should reject paths ending with /..', () => {
@@ -484,7 +480,9 @@ describe('validate', () => {
       });
 
       it('should reject paths with null bytes', () => {
-        expect(() => validateTLSCertPath('/etc/ssl/cert.pem\0.txt', 'tlsCA')).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('/etc/ssl/cert.pem\0.txt', 'tlsCA')).toThrow(
+          SecurityError
+        );
       });
     });
 
@@ -516,9 +514,7 @@ describe('validate', () => {
       });
 
       it('should reject attack from GAP_ANALYSIS.md: ../../../etc/shadow', () => {
-        expect(() =>
-          validateTLSCertPath('../../../etc/shadow', 'cert')
-        ).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('../../../etc/shadow', 'cert')).toThrow(SecurityError);
       });
     });
 
@@ -546,7 +542,9 @@ describe('validate', () => {
 
       it('should reject paths to SSH directories', () => {
         expect(() => validateTLSCertPath('/home/user/.ssh/id_rsa', 'tlsCA')).toThrow(SecurityError);
-        expect(() => validateTLSCertPath('/root/.ssh/authorized_keys', 'tlsCA')).toThrow(SecurityError);
+        expect(() => validateTLSCertPath('/root/.ssh/authorized_keys', 'tlsCA')).toThrow(
+          SecurityError
+        );
       });
 
       it('should reject paths to Kubernetes secrets', () => {
@@ -565,7 +563,10 @@ describe('validate', () => {
 
       it('should reject paths to GCP credentials', () => {
         expect(() =>
-          validateTLSCertPath('/home/user/.config/gcloud/application_default_credentials.json', 'tlsCA')
+          validateTLSCertPath(
+            '/home/user/.config/gcloud/application_default_credentials.json',
+            'tlsCA'
+          )
         ).toThrow(SecurityError);
       });
 

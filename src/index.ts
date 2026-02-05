@@ -2,7 +2,7 @@
  * Geode Client for Node.js
  *
  * A high-performance client library for the Geode graph database,
- * implementing ISO/IEC 39075:2024 GQL standard over QUIC + TLS 1.3.
+ * implementing ISO/IEC 39075:2024 GQL standard over QUIC + TLS 1.3 or gRPC.
  *
  * @packageDocumentation
  */
@@ -18,18 +18,24 @@ export { ConnectionPool } from './pool.js';
 export {
   type GeodeConfig,
   type PoolConfig,
+  type TransportType,
+  type DSNScheme,
   parseDSN,
   defaultConfig,
   validateConfig,
   getAddress,
   cloneConfig,
+  redactDSN,
+  redactConfig,
   DEFAULT_PORT,
+  DEFAULT_GRPC_PORT,
   DEFAULT_PAGE_SIZE,
   DEFAULT_HELLO_NAME,
   DEFAULT_HELLO_VERSION,
   DEFAULT_CONFORMANCE,
   MAX_QUERY_LENGTH,
   MAX_PAGE_SIZE,
+  SUPPORTED_SCHEMES,
 } from './config.js';
 
 // Query results
@@ -81,44 +87,19 @@ export {
   isRetryableError,
 } from './errors.js';
 
-// Protocol (for advanced usage)
-export {
-  MsgType,
-  RespType,
-  type Frame,
-  type FrameResult,
-  type AdditionalInfo,
-  parseFrame,
-  isErrorFrame,
-  isSchemaFrame,
-  isBindingsFrame,
-  isFinalFrame,
-  frameToError,
-  getColumnsFromSchema,
-  buildHelloMessage,
-  buildRunGQLMessage,
-  buildPullMessage,
-  buildBeginMessage,
-  buildCommitMessage,
-  buildRollbackMessage,
-  buildSavepointMessage,
-  buildRollbackToMessage,
-  buildPingMessage,
-  serializeMessage,
-  rewritePlaceholders,
-  countPlaceholders,
-  mergeParams,
-} from './protocol.js';
-
 // Transport (for advanced usage and testing)
 export {
   type Transport,
   BaseTransport,
+  QuicTransport,
   QuicheTransport,
   MockTransport,
   createTransport,
   buildTLSConfig,
 } from './transport.js';
+
+// gRPC Transport
+export { GrpcTransport } from './grpc-transport.js';
 
 // Validation
 export {
@@ -193,6 +174,52 @@ export {
   type CreateRoleOptions,
   type CreateRLSPolicyOptions,
 } from './auth.js';
+
+// Protobuf wire protocol (for advanced usage)
+export {
+  encodeWithLengthPrefix,
+  encodeQuicClientMessage,
+  decodeQuicServerMessage,
+  decodeLengthPrefix,
+  protoValueToJS,
+  jsToProtoValue,
+  buildHelloRequest,
+  buildExecuteRequest,
+  buildPullRequest,
+  buildPingRequest,
+  buildBeginRequest,
+  buildCommitRequest,
+  buildRollbackRequest,
+  buildSavepointRequest,
+  buildRollbackToRequest,
+  rowToRecord,
+  getProtoPath,
+  ensureProtoInitialized,
+  type HelloRequest,
+  type HelloResponse,
+  type ExecuteRequest,
+  type ExecutionResponse,
+  type SchemaDefinition,
+  type ColumnDefinition,
+  type DataPage,
+  type Row as ProtoRow,
+  type ProtoValue,
+  type ProtoError,
+  type PingRequest,
+  type PingResponse,
+  type BeginRequest,
+  type BeginResponse,
+  type CommitRequest,
+  type CommitResponse,
+  type RollbackRequest,
+  type RollbackResponse,
+  type QuicClientMessage,
+  type QuicServerMessage,
+  type Param,
+  type PullRequest,
+  type PullResponse,
+  type Status,
+} from './proto.js';
 
 // Re-export decimal.js-light for type convenience
 export type { default as Decimal } from 'decimal.js-light';

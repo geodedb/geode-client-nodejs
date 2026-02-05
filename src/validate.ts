@@ -19,14 +19,7 @@ const GQL_IDENTIFIER_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,127}$/;
 const MAX_IDENTIFIER_LENGTH = 128;
 
 // Allowed permission actions (uppercase for GQL syntax)
-const ALLOWED_PERMISSION_ACTIONS = new Set([
-  'READ',
-  'WRITE',
-  'DELETE',
-  'CREATE',
-  'UPDATE',
-  'ALL',
-]);
+const ALLOWED_PERMISSION_ACTIONS = new Set(['READ', 'WRITE', 'DELETE', 'CREATE', 'UPDATE', 'ALL']);
 
 // Allowed permission resources
 const ALLOWED_PERMISSION_RESOURCES = new Set([
@@ -164,7 +157,8 @@ export function validateParamName(name: string): void {
     // GAP #15: Don't include potentially sensitive parameter name in error
     throw new SecurityError({
       type: 'input',
-      message: 'invalid parameter name: must start with letter or underscore and contain only alphanumeric characters and underscores',
+      message:
+        'invalid parameter name: must start with letter or underscore and contain only alphanumeric characters and underscores',
     });
   }
 
@@ -896,9 +890,7 @@ export function validateTLSCertPath(path: string, fieldName: string): void {
       if (stats.isSymbolicLink()) {
         // Resolve the symlink and validate the target path
         const resolvedPath = fs.realpathSync(path);
-        const normalizedResolved = resolvedPath
-          .replace(/\\/g, '/')
-          .replace(/\/+/g, '/');
+        const normalizedResolved = resolvedPath.replace(/\\/g, '/').replace(/\/+/g, '/');
 
         // Check resolved path against blocklist
         checkAgainstBlocklist(normalizedResolved, fieldName);
