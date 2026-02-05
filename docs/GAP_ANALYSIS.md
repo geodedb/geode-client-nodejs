@@ -43,7 +43,7 @@ All Phase 4 security gaps have been addressed:
 |------|----------|------------|---------|-----------|-----------|----------|--------------|-------------|-------|-----|--------|
 | 1 | **High** | 72 | Prototype Pollution in rowToObject() | src/types.ts | CWE-1321, A03:2021 | line 861-866: Server-controlled keys iterated without validation | [#17](https://gitlab.com/devnw/codepros/geode/geode-client-nodejs/-/issues/17) | Added `isSafeObjectKey()` to reject `__proto__`, `constructor`, `prototype`; use `Object.create(null)` for prototype-free objects | Claude | 30d | **Closed** |
 | 2 | **High** | 65 | Escaped Backslash Bypass in RLS Predicate Validation | src/validate.ts | CWE-89, CWE-943 | line 706: String literal tracking doesn't count consecutive backslashes | [#18](https://gitlab.com/devnw/codepros/geode/geode-client-nodejs/-/issues/18) | Added consecutive backslash counting; quote is escaped only with odd number of preceding backslashes | Claude | 30d | **Closed** |
-| 3 | **Low** | 25 | Incomplete Regex Character Escaping in Password Policy | src/auth.ts | CWE-185 | line 770: Hyphen not escaped in regex character class | [#19](https://gitlab.com/devnw/codepros/geode/geode-client-nodejs/-/issues/19) | Added hyphen to escaped characters: `/[.*+?^${}()|[\\]\\\\-]/g` | Claude | 90d | **Closed** |
+| 3 | **Low** | 25 | Incomplete Regex Character Escaping in Password Policy | src/auth.ts | CWE-185 | line 770: Hyphen not escaped in regex character class | [#19](https://gitlab.com/devnw/codepros/geode/geode-client-nodejs/-/issues/19) | Added hyphen to escaped characters in regex (escapes literal pipe and backslashes) | Claude | 90d | **Closed** |
 | 4 | **Low** | 20 | Path Validation Symlink Resolution (TOCTOU) | src/validate.ts | CWE-367, CWE-59 | Path validation doesn't resolve symlinks | [#20](https://gitlab.com/devnw/codepros/geode/geode-client-nodejs/-/issues/20) | Added symlink detection via `fs.lstatSync()` and resolution via `fs.realpathSync()` with blocklist validation on resolved path | Claude | 90d | **Closed** |
 | 5 | **Low** | 15 | Incomplete Sensitive Path Blocklist | src/validate.ts | CWE-22 | Blocklist missing cloud credential and user home paths | [#21](https://gitlab.com/devnw/codepros/geode/geode-client-nodejs/-/issues/21) | Expanded `SENSITIVE_PATHS` constant: `/root/`, `/.ssh/`, `/var/run/secrets/`, `/.aws/`, `/.config/gcloud/`, `/.azure/`, `/.env` | Claude | 180d | **Closed** |
 | 6 | **Low** | 10 | Dev Dependency Vulnerabilities (undici/testcontainers) | package.json | CWE-1035 | npm audit: 2 moderate vulnerabilities in undici via testcontainers | [#22](https://gitlab.com/devnw/codepros/geode/geode-client-nodejs/-/issues/22) | Upgraded testcontainers to v11.11.0 which uses patched undici version; npm audit now clean | Claude | 180d | **Closed** |
@@ -99,6 +99,7 @@ const gql = `
 **Problem**: The `predicate` parameter is user-controlled and interpolated directly into the GQL query. While `validateQuery(predicate)` is called at line 531, this function only checks for null bytes and control characters - it does NOT prevent GQL injection.
 
 **Attack Example**:
+
 ```typescript
 await auth.createRLSPolicy(
   'malicious_policy',
@@ -132,9 +133,10 @@ options.key = await fs.promises.readFile(cfg.tlsKey, 'utf-8');
 ```
 
 **Attack Example**:
+
 ```
-geode://localhost:3141?ca=/etc/passwd
-geode://localhost:3141?cert=../../../etc/shadow
+quic://localhost:3141?ca=/etc/passwd
+quic://localhost:3141?cert=../../../etc/shadow
 ```
 
 **Required Fix**: Validate paths are absolute and within allowed directories.
@@ -150,6 +152,7 @@ geode://localhost:3141?cert=../../../etc/shadow
 **Original Problem**: The `rowToObject()` function iterated over server-controlled keys without validation, allowing prototype pollution attacks.
 
 **Fix Implemented**:
+
 ```typescript
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -178,6 +181,7 @@ export function rowToObject(row: Row): Record<string, unknown> {
 **Original Problem**: String literal tracking only checked single preceding backslash, not consecutive backslashes.
 
 **Fix Implemented**:
+
 ```typescript
 if (char === inString) {
   let backslashCount = 0;
@@ -202,6 +206,7 @@ if (char === inString) {
 **Original Problem**: Hyphen not escaped in regex metacharacter pattern.
 
 **Fix Implemented**:
+
 ```typescript
 // Added hyphen to escaped characters
 const specialCharsEscaped = policy.specialChars.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
@@ -216,6 +221,7 @@ const specialCharsEscaped = policy.specialChars.replace(/[.*+?^${}()|[\]\\-]/g, 
 **Original Problem**: Path validation used string matching without resolving symlinks.
 
 **Fix Implemented**:
+
 ```typescript
 if (fs.existsSync(path)) {
   const stats = fs.lstatSync(path);
@@ -236,6 +242,7 @@ if (fs.existsSync(path)) {
 **Original Problem**: Blocklist missing cloud credential paths and user home directories.
 
 **Fix Implemented**:
+
 ```typescript
 const SENSITIVE_PATHS = [
   '/etc/passwd', '/etc/shadow', '/etc/hosts',
@@ -262,6 +269,7 @@ const SENSITIVE_PATHS = [
 **Original Problem**: `npm audit` reported 2 moderate vulnerabilities in `undici` via `testcontainers`.
 
 **Fix Implemented**: Upgraded testcontainers from vulnerable version to v11.11.0:
+
 ```bash
 npm install --save-dev testcontainers@latest
 ```
@@ -279,6 +287,7 @@ npm install --save-dev testcontainers@latest
 **Original Problem**: The `valueToGQL()` function only escaped single quotes but not backslashes, enabling GQL injection through escape sequence manipulation.
 
 **Attack Vector**:
+
 ```typescript
 // Input: auth\'); DROP USER admin; //
 // Without fix, this becomes: 'auth\'); DROP USER admin; //'
@@ -289,6 +298,7 @@ npm install --save-dev testcontainers@latest
 ```
 
 **Fix Implemented**:
+
 ```typescript
 function valueToGQL(value: unknown): string {
   if (typeof value === 'string') {
@@ -308,6 +318,7 @@ function valueToGQL(value: unknown): string {
 **Original Problem**: ConfigError constructor included `JSON.stringify(options.value)` in error messages, potentially leaking sensitive configuration values like passwords.
 
 **Fix Implemented**:
+
 ```typescript
 const SENSITIVE_CONFIG_FIELDS = new Set(['password', 'pass', 'key', 'secret', 'token', 'credential']);
 
@@ -329,6 +340,7 @@ constructor(options: { field: string; value?: string; message: string }) {
 **Original Problem**: Port numbers were only checked for `isNaN`, not valid TCP/UDP range (1-65535).
 
 **Fix Implemented**:
+
 ```typescript
 export const MIN_PORT = 1;
 export const MAX_PORT = 65535;
@@ -356,6 +368,7 @@ if (!isValidPort(port)) {
 **Original Problem**: `where()` method accepted raw strings similar to `raw()` but lacked security documentation.
 
 **Fix Implemented**: Added comprehensive JSDoc security warnings:
+
 ```typescript
 /**
  * Add a WHERE clause.
@@ -381,6 +394,7 @@ if (!isValidPort(port)) {
 ## Security Posture Summary
 
 ### Strengths
+
 - TLS 1.3 enforced by default
 - Comprehensive input validation for most GQL identifiers
 - Allowlist validation for permission actions and resources
@@ -409,11 +423,13 @@ if (!isValidPort(port)) {
 - **NEW (Phase 4)**: Security documentation for `QueryBuilder.where()` string predicates
 
 ### Weaknesses (Remaining)
+
 None - All identified Phase 1, Phase 2, Phase 3, and Phase 4 security gaps have been addressed.
 
 ### Recommendations
 
 #### Maintenance
+
 1. **Keep Dependencies Updated** - Run `npm audit` regularly
 2. **Monitor for New Vulnerabilities** - Subscribe to security advisories
 3. **Review raw() Usage** - Audit code using deprecated raw() methods
@@ -424,6 +440,7 @@ None - All identified Phase 1, Phase 2, Phase 3, and Phase 4 security gaps have 
 ## Appendix: Review Methodology
 
 ### Phase 2 Review Scope
+
 - Full adversarial code review
 - CI/CD pipeline analysis
 - All configuration files
@@ -431,6 +448,7 @@ None - All identified Phase 1, Phase 2, Phase 3, and Phase 4 security gaps have 
 - Dangerous pattern detection
 
 ### Tools Used
+
 - Manual code review
 - npm audit
 - Pattern grep for dangerous patterns
@@ -438,6 +456,7 @@ None - All identified Phase 1, Phase 2, Phase 3, and Phase 4 security gaps have 
 - GitLab CLI (glab) for issue tracking
 
 ### Files Reviewed (Phase 2)
+
 - `src/*.ts` - All 15 source files (re-reviewed)
 - `.gitlab-ci.yml` - CI/CD configuration
 - `.gitleaks.toml` - Secret scanning configuration
@@ -445,8 +464,9 @@ None - All identified Phase 1, Phase 2, Phase 3, and Phase 4 security gaps have 
 - All test files for security patterns
 
 ### Patterns Searched
+
 - Dynamic code evaluation patterns
-- TLS bypass patterns (`insecure`, `skipVerify`)
+- TLS bypass patterns (`insecure_tls_skip_verify`, legacy aliases)
 - Credential handling (`password`, `credential`, `secret`, `token`)
 - Template literals with user input (`${`) - Injection vectors
 - File system operations with user-controlled paths
@@ -454,6 +474,7 @@ None - All identified Phase 1, Phase 2, Phase 3, and Phase 4 security gaps have 
 - Prototype pollution patterns
 
 ### Not In Scope
+
 - Geode server security
 - Network infrastructure
 - Deployed application configurations

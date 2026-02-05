@@ -99,7 +99,6 @@ The client communicates with Geode using Protocol Buffers over QUIC or gRPC.
 | --------- | --------- | ------------ |
 | `quic://` | QUIC      | 3141         |
 | `grpc://` | gRPC      | 50051        |
-| `geode://`| QUIC      | 3141         |
 
 ### Message Types (QuicClientMessage)
 
@@ -225,7 +224,7 @@ value.toJS(); // 42 (auto-converts based on safety)
 ```typescript
 import { createClient } from '@geodedb/client';
 
-const client = await createClient('geode://localhost:3141');
+const client = await createClient('quic://localhost:3141');
 const rows = await client.queryAll('MATCH (n) RETURN n LIMIT 10');
 await client.close();
 ```
@@ -243,7 +242,7 @@ await client.withTransaction(async (tx) => {
 ### Connection Pool Usage
 
 ```typescript
-const client = await createClient('geode://localhost:3141', {
+const client = await createClient('quic://localhost:3141', {
   pooling: true,
   pool: { min: 2, max: 10 },
 });

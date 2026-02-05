@@ -31,7 +31,7 @@ npm install @geodedb/client
 import { createClient } from '@geodedb/client';
 
 // Connect to Geode
-const client = await createClient('geode://localhost:3141');
+const client = await createClient('quic://localhost:3141');
 
 // Execute a query
 const rows = await client.queryAll('MATCH (n:Person) RETURN n.name, n.age');
@@ -53,7 +53,6 @@ The client supports multiple transport schemes:
 ```
 quic://[username:password@]host[:port][?options]   # QUIC transport (default port: 3141)
 grpc://[username:password@]host[:port][?options]   # gRPC transport (default port: 50051)
-geode://[username:password@]host[:port][?options]  # Legacy scheme (uses QUIC)
 host:port                                          # Simple format (uses QUIC)
 ```
 
@@ -66,7 +65,7 @@ host:port                                          # Simple format (uses QUIC)
 | `hello_ver`       | Client version                    | 1.0.0        |
 | `conformance`     | GQL conformance level             | min          |
 | `tls`             | Enable TLS (gRPC only)            | true         |
-| `insecure`        | Skip TLS verification (dev only)  | false        |
+| `insecure_tls_skip_verify` | Skip TLS verification (dev only)  | false        |
 | `ca`              | Path to CA certificate            | -            |
 | `cert`            | Path to client certificate (mTLS) | -            |
 | `key`             | Path to client key (mTLS)         | -            |
@@ -478,7 +477,7 @@ try {
 ## Connection Pool
 
 ```typescript
-const client = await createClient('geode://localhost:3141', {
+const client = await createClient('quic://localhost:3141', {
   pooling: true,
   pool: {
     min: 2, // Minimum connections to maintain
