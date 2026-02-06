@@ -13,9 +13,12 @@ GEODE_CONTAINER ?= geode-nodejs-test
 GEODE_HOST ?= 127.0.0.1
 GEODE_PORT ?= 3141
 
+# Path to canonical proto file in the main Geode server repo
+CANONICAL_PROTO ?= ../geode/src/proto/geode.proto
+
 .PHONY: all build clean test test-unit test-property test-integration test-integration-docker \
         bench lint fmt fmt-check typecheck doc coverage ci ci-quick ci-full help \
-        docker-start docker-stop docker-logs install dev watch
+        docker-start docker-stop docker-logs install dev watch sync-proto
 
 # Default target - run everything (except integration tests)
 all: install build fmt-check lint typecheck test-unit test-property bench-quick
@@ -42,6 +45,7 @@ help:
 	@echo "  make install       - Install dependencies"
 	@echo "  make build         - Build the package"
 	@echo "  make clean         - Clean build artifacts and caches"
+	@echo "  make sync-proto    - Copy canonical proto from Geode server"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test          - Run all tests (unit + property)"
@@ -107,6 +111,16 @@ clean:
 	rm -rf benchmark-results/
 	rm -f *.bench.json
 	@echo "✓ Clean complete"
+
+sync-proto:
+	@echo "Syncing proto file from canonical source..."
+	@if [ ! -f "$(CANONICAL_PROTO)" ]; then \
+		echo "ERROR: Canonical proto not found at $(CANONICAL_PROTO)"; \
+		echo "Set CANONICAL_PROTO to the correct path"; \
+		exit 1; \
+	fi
+	cp "$(CANONICAL_PROTO)" proto/geode.proto
+	@echo "✓ Proto file synced from $(CANONICAL_PROTO)"
 
 # =============================================================================
 # Test Targets

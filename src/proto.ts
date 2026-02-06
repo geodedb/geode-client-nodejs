@@ -5,7 +5,8 @@
  * Wire format for QUIC: 4-byte Big Endian length prefix + protobuf message body.
  */
 
-import * as protobuf from 'protobufjs';
+// Use default import for CJS/ESM interop (protobufjs is CJS)
+import protobuf from 'protobufjs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -73,7 +74,7 @@ export interface ProtoValue {
   nullVal?: NullValue;
   intVal?: IntValue;
   doubleVal?: DoubleValue;
-  boolVal?: BoolValue;
+  boolVal?: boolean;
   stringVal?: StringValue;
   decimalVal?: DecimalValue;
   bytesVal?: BytesValue;
@@ -97,10 +98,6 @@ export interface IntValue {
 export interface DoubleValue {
   value: number;
   kind: number;
-}
-
-export interface BoolValue {
-  value: boolean;
 }
 
 export interface StringValue {
@@ -372,7 +369,7 @@ export function jsToProtoValue(value: unknown): ProtoValue {
   }
 
   if (typeof value === 'boolean') {
-    return { boolVal: { value } };
+    return { boolVal: value };
   }
 
   if (typeof value === 'number') {
@@ -421,7 +418,7 @@ export function jsToProtoValue(value: unknown): ProtoValue {
 export function protoValueToJS(val: ProtoValue): unknown {
   if (val.nullVal !== undefined) return null;
 
-  if (val.boolVal !== undefined) return val.boolVal.value;
+  if (val.boolVal !== undefined) return val.boolVal;
 
   if (val.intVal !== undefined) {
     const n = val.intVal.value;

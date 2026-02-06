@@ -1,6 +1,20 @@
 syntax = "proto3";
 package geode;
 
+option go_package = "geodedb.com/geode/proto";
+
+// GeodeService provides gRPC access to the Geode database.
+service GeodeService {
+  rpc Handshake(HelloRequest) returns (HelloResponse);
+  rpc Execute(ExecuteRequest) returns (stream ExecutionResponse);
+  rpc Ping(PingRequest) returns (PingResponse);
+  rpc Begin(BeginRequest) returns (BeginResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+  rpc GetCdcDiagnostics(CdcDiagnosticsRequest) returns (CdcDiagnosticsResponse);
+  rpc ControlCdc(CdcControlRequest) returns (CdcControlResponse);
+}
+
 // ============================================================================
 // Transport Wrappers (QUIC framing)
 // ============================================================================
@@ -151,7 +165,7 @@ message Value {
     NullValue null_val = 1;
     IntValue int_val = 2;
     DoubleValue double_val = 3;
-    BoolValue bool_val = 4;
+    bool bool_val = 4;
     StringValue string_val = 5;
     DecimalValue decimal_val = 6;
     BytesValue bytes_val = 7;
@@ -165,10 +179,6 @@ message Value {
 }
 
 message NullValue {}
-
-message BoolValue {
-  bool value = 1;
-}
 
 enum IntKind {
   INT_KIND_UNSPECIFIED = 0;
@@ -564,42 +574,4 @@ message UploadBackupResponse {
   bool success = 1;
   string message = 2;
   string upload_path = 3;
-}
-
-// ============================================================================
-// gRPC Service Definitions
-// ============================================================================
-
-// GeodeService provides the main database operations over gRPC.
-service GeodeService {
-  // Hello establishes a session with authentication
-  rpc Hello(HelloRequest) returns (HelloResponse);
-
-  // Execute runs a GQL query and returns the first response (schema or error)
-  rpc Execute(ExecuteRequest) returns (ExecutionResponse);
-
-  // ExecuteStream runs a GQL query and streams all responses
-  rpc ExecuteStream(ExecuteRequest) returns (stream ExecutionResponse);
-
-  // Pull fetches the next page of results
-  rpc Pull(PullRequest) returns (PullResponse);
-
-  // Ping checks server health
-  rpc Ping(PingRequest) returns (PingResponse);
-
-  // Transaction operations
-  rpc Begin(BeginRequest) returns (BeginResponse);
-  rpc Commit(CommitRequest) returns (CommitResponse);
-  rpc Rollback(RollbackRequest) returns (RollbackResponse);
-  rpc Savepoint(SavepointRequest) returns (SavepointResponse);
-  rpc RollbackTo(RollbackToRequest) returns (RollbackToResponse);
-
-  // CDC operations
-  rpc CdcDiagnostics(CdcDiagnosticsRequest) returns (CdcDiagnosticsResponse);
-  rpc CdcControl(CdcControlRequest) returns (CdcControlResponse);
-
-  // Backup/Restore operations
-  rpc Backup(BackupRequest) returns (BackupResponse);
-  rpc Restore(RestoreRequest) returns (RestoreResponse);
-  rpc UploadBackup(UploadBackupRequest) returns (UploadBackupResponse);
 }

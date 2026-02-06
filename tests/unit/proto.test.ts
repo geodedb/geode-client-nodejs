@@ -120,11 +120,11 @@ describe('proto', () => {
 
     it('should convert boolean to proto and back', () => {
       const trueVal = jsToProtoValue(true);
-      expect(trueVal.boolVal?.value).toBe(true);
+      expect(trueVal.boolVal).toBe(true);
       expect(protoValueToJS(trueVal)).toBe(true);
 
       const falseVal = jsToProtoValue(false);
-      expect(falseVal.boolVal?.value).toBe(false);
+      expect(falseVal.boolVal).toBe(false);
       expect(protoValueToJS(falseVal)).toBe(false);
     });
 
