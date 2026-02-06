@@ -8,7 +8,7 @@ NODE ?= node
 
 # Docker settings for integration tests
 DOCKER ?= docker
-GEODE_IMAGE ?= registry.gitlab.com/devnw/geode/geode:latest
+GEODE_IMAGE ?= geodedb/geode:latest
 GEODE_CONTAINER ?= geode-nodejs-test
 GEODE_HOST ?= 127.0.0.1
 GEODE_PORT ?= 3141
@@ -84,7 +84,7 @@ help:
 	@echo "Environment variables:"
 	@echo "  GEODE_HOST        - Geode server host (default: 127.0.0.1)"
 	@echo "  GEODE_PORT        - Geode server port (default: 3141)"
-	@echo "  GEODE_IMAGE       - Docker image (default: registry.gitlab.com/devnw/geode/geode:latest)"
+	@echo "  GEODE_IMAGE       - Docker image (default: geodedb/geode:latest)"
 
 # =============================================================================
 # Setup Targets
