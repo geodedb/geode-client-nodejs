@@ -3,6 +3,16 @@
  *
  * Provides gRPC transport for communication with Geode server.
  * Uses @grpc/grpc-js with dynamic proto loading.
+ *
+ * Method mapping (QuicClientMessage field -> gRPC service RPC):
+ *   hello     -> Handshake (unary)
+ *   execute   -> Execute   (server-streaming: schema + data pages)
+ *   pull      -> reads next buffered message from the Execute stream
+ *   ping      -> Ping      (unary)
+ *   begin     -> Begin     (unary)
+ *   commit    -> Commit    (unary)
+ *   rollback  -> Rollback  (unary)
+ *   savepoint / rollbackTo -> not supported over gRPC
  */
 
 import * as grpc from '@grpc/grpc-js';
@@ -18,13 +28,10 @@ import {
   type QuicServerMessage,
   type HelloResponse,
   type ExecutionResponse,
-  type PullResponse,
   type PingResponse,
   type BeginResponse,
   type CommitResponse,
   type RollbackResponse,
-  type SavepointResponse,
-  type RollbackToResponse,
 } from './proto.js';
 import type { Transport } from './transport.js';
 
@@ -40,45 +47,30 @@ const PROTO_LOADER_OPTIONS: protoLoader.Options = {
   oneofs: true,
 };
 
-// Service client type (dynamically loaded)
+// Service client type (dynamically loaded).
+// Method names are camelCase of the proto RPC names.
 interface GeodeServiceClient {
-  hello(
+  handshake(
     request: unknown,
     callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
-  execute(
-    request: unknown,
-    callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
-  executeStream(request: unknown): grpc.ClientReadableStream<unknown>;
-  pull(
-    request: unknown,
-    callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
+  ): grpc.ClientUnaryCall;
+  execute(request: unknown): grpc.ClientReadableStream<unknown>;
   ping(
     request: unknown,
     callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
+  ): grpc.ClientUnaryCall;
   begin(
     request: unknown,
     callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
+  ): grpc.ClientUnaryCall;
   commit(
     request: unknown,
     callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
+  ): grpc.ClientUnaryCall;
   rollback(
     request: unknown,
     callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
-  savepoint(
-    request: unknown,
-    callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
-  rollbackTo(
-    request: unknown,
-    callback: (error: grpc.ServiceError | null, response: unknown) => void
-  ): void;
+  ): grpc.ClientUnaryCall;
   close(): void;
 }
 
@@ -169,16 +161,34 @@ export class GrpcTransport implements Transport {
 
     try {
       if (msg.hello) {
-        const response = await this.callUnary<HelloResponse>('hello', msg.hello, signal);
+        // hello -> Handshake RPC (unary)
+        const response = await this.callUnary<HelloResponse>('handshake', msg.hello, signal);
         this._pendingResponses.push({ hello: response });
       } else if (msg.execute) {
-        const response = await this.callUnary<ExecutionResponse>('execute', msg.execute, signal);
-        this._pendingResponses.push({ execute: response });
+        // execute -> Execute RPC (server-streaming)
+        // Collects all streamed messages (schema + data pages) into the pending queue.
+        await this.callServerStream(msg.execute, signal);
       } else if (msg.pull) {
-        const response = await this.callUnary<PullResponse>('pull', msg.pull, signal);
-        // PullResponse wraps ExecutionResponse
-        if (response.response) {
-          this._pendingResponses.push({ execute: response.response });
+        // pull -> no separate gRPC RPC; responses are already buffered
+        // from the streaming Execute call. If the buffer is empty the
+        // caller will get the response via receiveProto which checks
+        // the pending queue. Nothing to do here.
+        // However, if no buffered responses remain, that means the
+        // stream completed (final page was already delivered).
+        // Push a synthetic final page so the caller knows we're done.
+        if (this._pendingResponses.length === 0) {
+          this._pendingResponses.push({
+            execute: {
+              status: {
+                statusClass: '00000',
+                statusSubclass: '',
+                additionalStatuses: [],
+                flaggerFindings: [],
+              },
+              payload: 'page',
+              page: { rows: [], final: true, ordered: false, orderKeys: [] },
+            } as ExecutionResponse,
+          });
         }
       } else if (msg.ping) {
         const response = await this.callUnary<PingResponse>('ping', msg.ping, signal);
@@ -193,19 +203,17 @@ export class GrpcTransport implements Transport {
         const response = await this.callUnary<RollbackResponse>('rollback', msg.rollback, signal);
         this._pendingResponses.push({ rollback: response });
       } else if (msg.savepoint) {
-        const response = await this.callUnary<SavepointResponse>(
-          'savepoint',
-          msg.savepoint,
-          signal
-        );
-        this._pendingResponses.push({ savepoint: response });
+        // Savepoint is not exposed as a gRPC RPC on the server.
+        throw new TransportError({
+          operation: 'sendProto',
+          cause: new Error('Savepoint is not supported over gRPC transport'),
+        });
       } else if (msg.rollbackTo) {
-        const response = await this.callUnary<RollbackToResponse>(
-          'rollbackTo',
-          msg.rollbackTo,
-          signal
-        );
-        this._pendingResponses.push({ rollbackTo: response });
+        // RollbackTo is not exposed as a gRPC RPC on the server.
+        throw new TransportError({
+          operation: 'sendProto',
+          cause: new Error('RollbackTo is not supported over gRPC transport'),
+        });
       } else {
         throw new TransportError({
           operation: 'sendProto',
@@ -339,6 +347,56 @@ export class GrpcTransport implements Transport {
         const onAbort = () => {
           call.cancel();
           reject(new TransportError({ operation: method, cause: new Error('Aborted') }));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    });
+  }
+
+  /**
+   * Call the server-streaming Execute RPC.
+   * Collects all streamed ExecutionResponse messages into _pendingResponses.
+   */
+  private callServerStream(request: unknown, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this._client) {
+        reject(new Error('No client'));
+        return;
+      }
+
+      // Cancel any previous stream
+      if (this._activeStream) {
+        this._activeStream.cancel();
+        this._activeStream = null;
+      }
+
+      const stream = this._client.execute(request);
+      this._activeStream = stream;
+
+      stream.on('data', (response: unknown) => {
+        this._pendingResponses.push({ execute: response as ExecutionResponse });
+      });
+
+      stream.on('end', () => {
+        this._activeStream = null;
+        resolve();
+      });
+
+      stream.on('error', (error: grpc.ServiceError) => {
+        this._activeStream = null;
+        reject(
+          new TransportError({
+            operation: 'execute',
+            address: this._address,
+            cause: new Error(`gRPC error ${error.code}: ${error.message}`),
+          })
+        );
+      });
+
+      if (signal) {
+        const onAbort = () => {
+          stream.cancel();
+          reject(new TransportError({ operation: 'execute', cause: new Error('Aborted') }));
         };
         signal.addEventListener('abort', onAbort, { once: true });
       }

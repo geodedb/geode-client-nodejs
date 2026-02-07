@@ -12,6 +12,7 @@ GEODE_IMAGE ?= geodedb/geode:latest
 GEODE_CONTAINER ?= geode-nodejs-test
 GEODE_HOST ?= 127.0.0.1
 GEODE_PORT ?= 3141
+GEODE_GRPC_PORT ?= 50051
 
 # Path to canonical proto file in the main Geode server repo
 CANONICAL_PROTO ?= ../geode/src/proto/geode.proto
@@ -53,6 +54,7 @@ help:
 	@echo "  make test-property - Run property-based tests"
 	@echo "  make test-integration - Run integration tests (requires Geode server)"
 	@echo "  make test-integration-docker - Run integration tests with Docker"
+	@echo "  make test-integration-grpc  - Run gRPC integration tests"
 	@echo "  make test-all      - Run ALL tests including integration"
 	@echo ""
 	@echo "Quality targets:"
@@ -160,6 +162,17 @@ test-integration-docker: docker-start
 	$(MAKE) docker-stop
 	@echo "✓ Docker integration tests complete"
 
+test-integration-grpc:
+	@echo "Running gRPC integration tests..."
+	@echo ""
+	@echo "Tests connect to Geode gRPC server at $(GEODE_HOST):$(GEODE_GRPC_PORT)"
+	@echo "Start server first: cd ../geode && ./zig-out/bin/geode serve --listen-grpc 0.0.0.0:50051"
+	@echo "Or use: make docker-start"
+	@echo ""
+	GEODE_HOST=$(GEODE_HOST) GEODE_GRPC_PORT=$(GEODE_GRPC_PORT) GEODE_TRANSPORT=grpc \
+		$(NPM) run test:integration
+	@echo "✓ gRPC integration tests complete"
+
 test-all: test-unit test-property test-integration
 	@echo "✓ All tests complete (including integration)"
 
@@ -224,11 +237,13 @@ docker-start:
 	$(DOCKER) run -d --name $(GEODE_CONTAINER) \
 		-e GEODE_ALLOW_NO_AUTH=1 \
 		-p $(GEODE_PORT):3141/udp \
+		-p $(GEODE_GRPC_PORT):50051/tcp \
 		$(GEODE_IMAGE) \
-		serve --listen 0.0.0.0:3141 --log-level info --disable-auth
+		serve --listen 0.0.0.0:3141 --listen-grpc 0.0.0.0:50051 --log-level info --disable-auth
 	@echo "✓ Geode container started"
 	@echo "  Container: $(GEODE_CONTAINER)"
-	@echo "  Port: $(GEODE_PORT)/udp"
+	@echo "  QUIC Port: $(GEODE_PORT)/udp"
+	@echo "  gRPC Port: $(GEODE_GRPC_PORT)/tcp"
 
 docker-stop:
 	@echo "Stopping Geode Docker container..."
