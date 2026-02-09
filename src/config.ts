@@ -117,10 +117,10 @@ export interface GeodeConfig {
  * Connection pool configuration.
  */
 export interface PoolConfig extends GeodeConfig {
-  /** Minimum number of connections in pool (default: 2) */
+  /** Minimum number of connections in pool (default: 1) */
   minConnections?: number;
 
-  /** Maximum number of connections in pool (default: 10) */
+  /** Maximum number of connections in pool (default: 3) */
   maxConnections?: number;
 
   /** Time to wait for connection in milliseconds (default: 30000) */

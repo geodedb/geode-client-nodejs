@@ -483,7 +483,7 @@ export class Connection {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10);
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
       const response = await this._transport.receiveProto(controller.signal);

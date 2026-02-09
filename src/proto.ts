@@ -475,9 +475,9 @@ export function protoValueToJS(val: ProtoValue): unknown {
     }
     return {
       id: typeof edge.id === 'bigint' ? edge.id : BigInt(edge.id),
-      fromId: typeof edge.fromId === 'bigint' ? edge.fromId : BigInt(edge.fromId),
-      toId: typeof edge.toId === 'bigint' ? edge.toId : BigInt(edge.toId),
-      label: edge.label,
+      startNode: typeof edge.fromId === 'bigint' ? edge.fromId : BigInt(edge.fromId),
+      endNode: typeof edge.toId === 'bigint' ? edge.toId : BigInt(edge.toId),
+      type: edge.label,
       properties: props,
     };
   }

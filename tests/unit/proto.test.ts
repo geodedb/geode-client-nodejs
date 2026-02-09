@@ -234,6 +234,121 @@ describe('proto', () => {
     });
   });
 
+  describe('node value conversion', () => {
+    it('should convert node proto value with correct fields', () => {
+      const nodeVal = {
+        nodeVal: {
+          id: 42n,
+          labels: ['Person'],
+          properties: [{ key: 'name', value: { stringVal: { value: 'Alice', kind: 1 } } }],
+        },
+      };
+
+      const result = protoValueToJS(nodeVal) as Record<string, unknown>;
+      expect(result['id']).toBe(42n);
+      expect(result['labels']).toEqual(['Person']);
+      expect(result['properties']).toEqual({ name: 'Alice' });
+    });
+  });
+
+  describe('edge value conversion', () => {
+    it('should return type field (not label) from edge proto', () => {
+      const edgeVal = {
+        edgeVal: {
+          id: 100n,
+          fromId: 1n,
+          toId: 2n,
+          label: 'KNOWS',
+          properties: [],
+        },
+      };
+
+      const result = protoValueToJS(edgeVal) as Record<string, unknown>;
+      expect(result['type']).toBe('KNOWS');
+      expect(result).not.toHaveProperty('label');
+    });
+
+    it('should return startNode/endNode (not fromId/toId) from edge proto', () => {
+      const edgeVal = {
+        edgeVal: {
+          id: 100n,
+          fromId: 1n,
+          toId: 2n,
+          label: 'KNOWS',
+          properties: [],
+        },
+      };
+
+      const result = protoValueToJS(edgeVal) as Record<string, unknown>;
+      expect(result['startNode']).toBe(1n);
+      expect(result['endNode']).toBe(2n);
+      expect(result).not.toHaveProperty('fromId');
+      expect(result).not.toHaveProperty('toId');
+    });
+
+    it('should convert edge id to BigInt', () => {
+      const edgeVal = {
+        edgeVal: {
+          id: 55,
+          fromId: 10,
+          toId: 20,
+          label: 'LIKES',
+          properties: [],
+        },
+      };
+
+      const result = protoValueToJS(edgeVal) as Record<string, unknown>;
+      expect(result['id']).toBe(55n);
+      expect(result['startNode']).toBe(10n);
+      expect(result['endNode']).toBe(20n);
+      expect(result['type']).toBe('LIKES');
+    });
+
+    it('should convert edge properties', () => {
+      const edgeVal = {
+        edgeVal: {
+          id: 100n,
+          fromId: 1n,
+          toId: 2n,
+          label: 'KNOWS',
+          properties: [
+            { key: 'since', value: { intVal: { value: 2020, kind: 1 } } },
+            { key: 'weight', value: { doubleVal: { value: 0.9, kind: 1 } } },
+          ],
+        },
+      };
+
+      const result = protoValueToJS(edgeVal) as Record<string, unknown>;
+      const props = result['properties'] as Record<string, unknown>;
+      expect(props['since']).toBe(2020);
+      expect(props['weight']).toBe(0.9);
+    });
+  });
+
+  describe('path value conversion', () => {
+    it('should convert path with nodes and edges', () => {
+      const pathVal = {
+        pathVal: {
+          nodes: [
+            { id: 1n, labels: ['Person'], properties: [] },
+            { id: 2n, labels: ['Person'], properties: [] },
+          ],
+          edges: [{ id: 100n, fromId: 1n, toId: 2n, label: 'KNOWS', properties: [] }],
+        },
+      };
+
+      const result = protoValueToJS(pathVal) as Record<string, unknown>;
+      const nodes = result['nodes'] as Record<string, unknown>[];
+      const edges = result['edges'] as Record<string, unknown>[];
+
+      expect(nodes).toHaveLength(2);
+      expect(edges).toHaveLength(1);
+      expect(edges[0]!['type']).toBe('KNOWS');
+      expect(edges[0]!['startNode']).toBe(1n);
+      expect(edges[0]!['endNode']).toBe(2n);
+    });
+  });
+
   describe('server message decoding', () => {
     it('should decode HelloResponse', () => {
       // Create a mock encoded HelloResponse

@@ -143,8 +143,8 @@ export class ConnectionPool {
 
   constructor(config: PoolConfig, rateLimiterConfig?: Partial<RateLimiterConfig>) {
     this._config = config;
-    this._minConnections = config.minConnections ?? 2;
-    this._maxConnections = config.maxConnections ?? 10;
+    this._minConnections = config.minConnections ?? 1;
+    this._maxConnections = config.maxConnections ?? 3;
     this._acquireTimeout = config.acquireTimeout ?? 30000;
     this._idleTimeout = config.idleTimeout ?? 60000;
     this._rateLimiter = new RateLimiter(rateLimiterConfig);
