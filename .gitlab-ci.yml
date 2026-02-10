@@ -109,6 +109,10 @@ include:
 # Job Overrides and Customizations
 # =============================================================================
 
+# SBOM jobs may fail due to DNS/network issues downloading syft
+sbom-generate:
+  allow_failure: true
+
 # Override publish rules to only trigger on version tags (including pre-releases)
 node-publish-npm:
   rules:
