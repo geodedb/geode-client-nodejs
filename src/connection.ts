@@ -314,17 +314,17 @@ export class Connection {
       }
 
       if (!isFinal && initialRows.length === 0) {
-        // Send first PULL
+        // No inline data received - send PULL request to get first page
         this._requestId++;
         const pageSize = options?.pageSize ?? this._config.pageSize;
         const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
         await this._transport.sendProto(pullMsg, signal);
 
-        // Read data page response
+        // Read pull response - server wraps data in pull.response, not execute
         const pullResponse = await this._transport.receiveProto(signal);
+        const pullExec = pullResponse.pull?.response ?? pullResponse.execute;
 
-        if (pullResponse.execute) {
-          const pullExec = pullResponse.execute;
+        if (pullExec) {
           if (isErrorResponse(pullExec)) {
             this._state = this._inTransaction ? 'in_transaction' : 'idle';
             throw protoErrorToDriverError(pullExec, pullExec.status?.statusClass);
@@ -452,11 +452,12 @@ export class Connection {
 
     const response = await this._transport.receiveProto(signal);
 
-    if (!response.execute) {
+    // Server sends pull data in pull.response, not execute
+    const execResp = response.pull?.response ?? response.execute;
+
+    if (!execResp) {
       return { rows: [], final: true };
     }
-
-    const execResp = response.execute;
 
     if (isErrorResponse(execResp)) {
       throw protoErrorToDriverError(execResp, execResp.status?.statusClass);

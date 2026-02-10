@@ -110,8 +110,20 @@ export class GrpcTransport implements Transport {
 
       // Build channel credentials
       let credentials: grpc.ChannelCredentials;
-      if (cfg.tls === false || cfg.insecureSkipVerify) {
+      if (cfg.tls === false) {
         credentials = grpc.credentials.createInsecure();
+      } else if (cfg.insecureSkipVerify) {
+        // Use TLS but skip certificate verification (for self-signed certs)
+        // Load CA cert if provided, otherwise use null (skip CA validation)
+        let rootCerts: Buffer | null = null;
+        if (cfg.tlsCA) {
+          rootCerts = await import('fs').then((fs) => fs.promises.readFile(cfg.tlsCA!));
+        } else if (cfg.tlsCACert) {
+          rootCerts = Buffer.from(cfg.tlsCACert);
+        }
+        credentials = grpc.credentials.createSsl(rootCerts, null, null, {
+          checkServerIdentity: () => undefined,
+        });
       } else {
         const sslOptions = await buildGrpcSslOptions(cfg);
         credentials = grpc.credentials.createSsl(
