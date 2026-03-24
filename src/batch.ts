@@ -73,6 +73,14 @@ export interface BatchOptions {
  * By default, queries are executed sequentially and all results are collected.
  * Set stopOnError to true to abort on the first failure.
  *
+ * When `options.concurrency` is greater than 1, the batch delegates to
+ * {@link batchParallel} for concurrent execution. Note that a single
+ * `Connection` can only execute one query at a time due to the connection
+ * state machine, so `batchParallel` will automatically fall back to
+ * sequential execution (concurrency=1) when given a single connection.
+ * For true parallelism, use a `ConnectionPool` to acquire separate
+ * connections per concurrent query.
+ *
  * @param conn - Connection to use
  * @param queries - Array of queries to execute
  * @param options - Batch execution options
@@ -94,6 +102,11 @@ export async function batch(
   queries: BatchQuery[],
   options?: BatchOptions
 ): Promise<BatchSummary> {
+  // PERF-6: Delegate to batchParallel when concurrency > 1
+  const concurrency = options?.concurrency ?? 1;
+  if (concurrency > 1) {
+    return batchParallel(conn, queries, { ...options, concurrency });
+  }
   const results: BatchResult[] = [];
   const startTime = Date.now();
   let successful = 0;
@@ -299,19 +312,35 @@ export async function batchMap(
  * Unlike the sequential batch(), this executes multiple queries concurrently
  * up to the specified limit.
  *
- * Note: Results may be returned out of order.
+ * **Important:** A single `Connection` can only execute one query at a time
+ * (the connection state machine throws `ErrQueryInProgress` for concurrent
+ * queries). When a single connection is provided with concurrency > 1, this
+ * function automatically falls back to sequential execution (concurrency=1)
+ * to prevent runtime errors.
  *
- * @param conn - Connection to use
+ * For true parallel execution, use a connection pool or connection factory
+ * that provides separate connections per concurrent query.
+ *
+ * Note: When executing concurrently, results may arrive out of order but
+ * are sorted by index before returning.
+ *
+ * @param conn - Connection to use (single connection forces sequential execution)
  * @param queries - Array of queries to execute
  * @param options - Batch execution options with concurrency
- * @returns Batch summary (results in completion order)
+ * @returns Batch summary (results sorted by query index)
  */
 export async function batchParallel(
   conn: Connection,
   queries: BatchQuery[],
   options?: BatchOptions & { concurrency: number }
 ): Promise<BatchSummary> {
-  const concurrency = options?.concurrency ?? 5;
+  // QUAL-A1: A single Connection cannot handle concurrent queries because
+  // Connection.checkState() throws ErrQueryInProgress when state is 'fetching'
+  // or an activeResult exists. Clamp concurrency to 1 for single connections
+  // to prevent runtime errors.
+  const requestedConcurrency = options?.concurrency ?? 5;
+  const concurrency = Math.max(1, Math.min(requestedConcurrency, 1));
+
   const results: BatchResult[] = [];
   const startTime = Date.now();
   let successful = 0;

@@ -4,6 +4,10 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { BatchQuery, BatchResult, BatchSummary, BatchOptions } from '../../src/batch.js';
+import { batch, batchParallel } from '../../src/batch.js';
+import { Connection } from '../../src/connection.js';
+import { MockTransport } from '../../src/transport.js';
+import type { QuicServerMessage } from '../../src/proto.js';
 
 describe('Batch Operations Types', () => {
   describe('BatchQuery interface', () => {
@@ -262,6 +266,191 @@ describe('Batch Operation Logic', () => {
       };
 
       expect(result.rows).toHaveLength(0);
+    });
+  });
+});
+
+/**
+ * Helper to create a mock connection with a transport that queues
+ * the right responses for N sequential queries.
+ */
+async function createMockConnection(): Promise<{ conn: Connection; transport: MockTransport }> {
+  const transport = new MockTransport();
+
+  // Queue HELLO response
+  transport.queueProtoResponse({
+    hello: {
+      success: true,
+      sessionId: 'batch-test-session',
+      errorMessage: '',
+      capabilities: ['gql', 'transactions'],
+    },
+  });
+
+  const conn = await Connection.connectWithTransport(
+    {
+      host: 'localhost',
+      port: 3141,
+      pageSize: 100,
+      transport: 'quic',
+      helloName: 'test-client',
+      helloVersion: '1.0.0',
+      conformance: 'min',
+      tls: true,
+    },
+    transport
+  );
+
+  return { conn, transport };
+}
+
+/**
+ * Queue responses for a single successful query returning one row.
+ */
+function queueQueryResponses(transport: MockTransport, value: number): void {
+  // Schema response
+  transport.queueProtoResponse({
+    execute: {
+      schema: {
+        columns: [{ name: 'num', type: 'INT64' }],
+      },
+    },
+  });
+
+  // Inline data page (final=true so no PULL needed)
+  transport.queueProtoResponse({
+    execute: {
+      page: {
+        rows: [
+          {
+            values: [{ intVal: { value, kind: 1 } }],
+          },
+        ],
+        final: true,
+        ordered: false,
+        orderKeys: [],
+      },
+    },
+  });
+}
+
+describe('Batch Functional Tests', () => {
+  describe('PERF-6: batch() delegates to batchParallel when concurrency > 1', () => {
+    it('should execute all queries when concurrency is set', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // Queue responses for 3 queries
+      queueQueryResponses(transport, 1);
+      queueQueryResponses(transport, 2);
+      queueQueryResponses(transport, 3);
+
+      const queries: BatchQuery[] = [
+        { query: 'RETURN 1 AS num' },
+        { query: 'RETURN 2 AS num' },
+        { query: 'RETURN 3 AS num' },
+      ];
+
+      const summary = await batch(conn, queries, { concurrency: 4 });
+
+      expect(summary.total).toBe(3);
+      expect(summary.successful).toBe(3);
+      expect(summary.failed).toBe(0);
+      expect(summary.results).toHaveLength(3);
+      // Results should be sorted by index
+      expect(summary.results[0]!.index).toBe(0);
+      expect(summary.results[1]!.index).toBe(1);
+      expect(summary.results[2]!.index).toBe(2);
+
+      await conn.close();
+    });
+
+    it('should execute sequentially when concurrency is 1 (default)', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // Queue responses for 2 queries
+      queueQueryResponses(transport, 10);
+      queueQueryResponses(transport, 20);
+
+      const queries: BatchQuery[] = [{ query: 'RETURN 10 AS num' }, { query: 'RETURN 20 AS num' }];
+
+      const summary = await batch(conn, queries);
+
+      expect(summary.total).toBe(2);
+      expect(summary.successful).toBe(2);
+      expect(summary.failed).toBe(0);
+
+      await conn.close();
+    });
+  });
+
+  describe('QUAL-A1: batchParallel falls back to sequential for single connection', () => {
+    it('should complete all queries without ErrQueryInProgress', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // Queue responses for 4 queries
+      for (let i = 0; i < 4; i++) {
+        queueQueryResponses(transport, i + 1);
+      }
+
+      const queries: BatchQuery[] = [
+        { query: 'RETURN 1 AS num' },
+        { query: 'RETURN 2 AS num' },
+        { query: 'RETURN 3 AS num' },
+        { query: 'RETURN 4 AS num' },
+      ];
+
+      // This would previously throw ErrQueryInProgress because batchParallel
+      // tried to run concurrent queries on a single connection
+      const summary = await batchParallel(conn, queries, { concurrency: 4 });
+
+      expect(summary.total).toBe(4);
+      expect(summary.successful).toBe(4);
+      expect(summary.failed).toBe(0);
+      // Verify all results are present and sorted by index
+      for (let i = 0; i < 4; i++) {
+        expect(summary.results[i]!.index).toBe(i);
+        expect(summary.results[i]!.success).toBe(true);
+      }
+
+      await conn.close();
+    });
+
+    it('should handle 10 queries with concurrency 4 on single connection', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // Queue responses for 10 queries
+      for (let i = 0; i < 10; i++) {
+        queueQueryResponses(transport, i);
+      }
+
+      const queries: BatchQuery[] = Array.from({ length: 10 }, (_, i) => ({
+        query: `RETURN ${i} AS num`,
+      }));
+
+      const summary = await batchParallel(conn, queries, { concurrency: 4 });
+
+      expect(summary.total).toBe(10);
+      expect(summary.successful).toBe(10);
+      expect(summary.failed).toBe(0);
+
+      await conn.close();
+    });
+  });
+
+  describe('batch sequential execution', () => {
+    it('should execute queries sequentially by default', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      queueQueryResponses(transport, 42);
+
+      const summary = await batch(conn, [{ query: 'RETURN 42 AS num' }]);
+
+      expect(summary.total).toBe(1);
+      expect(summary.successful).toBe(1);
+      expect(summary.failed).toBe(0);
+      expect(summary.results[0]!.success).toBe(true);
+
+      await conn.close();
     });
   });
 });
