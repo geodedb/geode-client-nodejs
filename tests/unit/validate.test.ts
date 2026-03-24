@@ -440,145 +440,174 @@ describe('validate', () => {
 
   describe('validateTLSCertPath', () => {
     // GAP #12 - Path Traversal Prevention Tests
+    // PERF-11: validateTLSCertPath is now async (uses fs.promises instead of sync fs ops)
 
     describe('valid paths', () => {
-      it('should accept absolute paths to certificate directories', () => {
-        expect(() => validateTLSCertPath('/etc/ssl/certs/ca.pem', 'tlsCA')).not.toThrow();
-        expect(() => validateTLSCertPath('/etc/pki/tls/certs/server.crt', 'tlsCert')).not.toThrow();
-        expect(() =>
+      it('should accept absolute paths to certificate directories', async () => {
+        await expect(
+          validateTLSCertPath('/etc/ssl/certs/ca.pem', 'tlsCA')
+        ).resolves.toBeUndefined();
+        await expect(
+          validateTLSCertPath('/etc/pki/tls/certs/server.crt', 'tlsCert')
+        ).resolves.toBeUndefined();
+        await expect(
           validateTLSCertPath('/usr/local/share/ca-certificates/custom.crt', 'tlsCA')
-        ).not.toThrow();
+        ).resolves.toBeUndefined();
       });
 
-      it('should accept relative paths without traversal', () => {
-        expect(() => validateTLSCertPath('./certs/ca.pem', 'tlsCA')).not.toThrow();
-        expect(() => validateTLSCertPath('certs/server.crt', 'tlsCert')).not.toThrow();
-        expect(() => validateTLSCertPath('server.key', 'tlsKey')).not.toThrow();
+      it('should accept relative paths without traversal', async () => {
+        await expect(validateTLSCertPath('./certs/ca.pem', 'tlsCA')).resolves.toBeUndefined();
+        await expect(validateTLSCertPath('certs/server.crt', 'tlsCert')).resolves.toBeUndefined();
+        await expect(validateTLSCertPath('server.key', 'tlsKey')).resolves.toBeUndefined();
       });
 
-      it('should accept home directory paths', () => {
-        expect(() => validateTLSCertPath('/home/user/.ssl/cert.pem', 'tlsCert')).not.toThrow();
+      it('should accept home directory paths', async () => {
+        await expect(
+          validateTLSCertPath('/home/user/.ssl/cert.pem', 'tlsCert')
+        ).resolves.toBeUndefined();
       });
     });
 
     describe('path traversal prevention', () => {
-      it('should reject paths with directory traversal (../)', () => {
-        expect(() => validateTLSCertPath('../../../etc/passwd', 'tlsCA')).toThrow(SecurityError);
-        expect(() => validateTLSCertPath('/etc/ssl/../passwd', 'tlsCA')).toThrow(SecurityError);
-        expect(() => validateTLSCertPath('certs/../../etc/shadow', 'tlsCert')).toThrow(
+      it('should reject paths with directory traversal (../)', async () => {
+        await expect(validateTLSCertPath('../../../etc/passwd', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
+        await expect(validateTLSCertPath('/etc/ssl/../passwd', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
+        await expect(validateTLSCertPath('certs/../../etc/shadow', 'tlsCert')).rejects.toThrow(
           SecurityError
         );
       });
 
-      it('should reject paths ending with /..', () => {
-        expect(() => validateTLSCertPath('/etc/ssl/..', 'tlsCA')).toThrow(SecurityError);
+      it('should reject paths ending with /..', async () => {
+        await expect(validateTLSCertPath('/etc/ssl/..', 'tlsCA')).rejects.toThrow(SecurityError);
       });
 
-      it('should reject encoded traversal sequences', () => {
-        expect(() => validateTLSCertPath('%2e%2e%2fetc/passwd', 'tlsCA')).toThrow(SecurityError);
-        expect(() => validateTLSCertPath('%252e%252e/etc/passwd', 'tlsCA')).toThrow(SecurityError);
+      it('should reject encoded traversal sequences', async () => {
+        await expect(validateTLSCertPath('%2e%2e%2fetc/passwd', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
+        await expect(validateTLSCertPath('%252e%252e/etc/passwd', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
       });
 
-      it('should reject paths with null bytes', () => {
-        expect(() => validateTLSCertPath('/etc/ssl/cert.pem\0.txt', 'tlsCA')).toThrow(
+      it('should reject paths with null bytes', async () => {
+        await expect(validateTLSCertPath('/etc/ssl/cert.pem\0.txt', 'tlsCA')).rejects.toThrow(
           SecurityError
         );
       });
     });
 
     describe('restricted system file prevention', () => {
-      it('should reject paths to /etc/passwd', () => {
-        expect(() => validateTLSCertPath('/etc/passwd', 'tlsCA')).toThrow(SecurityError);
+      it('should reject paths to /etc/passwd', async () => {
+        await expect(validateTLSCertPath('/etc/passwd', 'tlsCA')).rejects.toThrow(SecurityError);
       });
 
-      it('should reject paths to /etc/shadow', () => {
-        expect(() => validateTLSCertPath('/etc/shadow', 'tlsCA')).toThrow(SecurityError);
+      it('should reject paths to /etc/shadow', async () => {
+        await expect(validateTLSCertPath('/etc/shadow', 'tlsCA')).rejects.toThrow(SecurityError);
       });
 
-      it('should reject paths to /proc/', () => {
-        expect(() => validateTLSCertPath('/proc/self/environ', 'tlsCA')).toThrow(SecurityError);
+      it('should reject paths to /proc/', async () => {
+        await expect(validateTLSCertPath('/proc/self/environ', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
       });
 
-      it('should reject paths to /sys/', () => {
-        expect(() => validateTLSCertPath('/sys/kernel/config', 'tlsCA')).toThrow(SecurityError);
+      it('should reject paths to /sys/', async () => {
+        await expect(validateTLSCertPath('/sys/kernel/config', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
       });
 
-      it('should reject paths to /dev/', () => {
-        expect(() => validateTLSCertPath('/dev/urandom', 'tlsCA')).toThrow(SecurityError);
+      it('should reject paths to /dev/', async () => {
+        await expect(validateTLSCertPath('/dev/urandom', 'tlsCA')).rejects.toThrow(SecurityError);
       });
     });
 
     describe('documented attack examples', () => {
-      it('should reject attack from GAP_ANALYSIS.md: /etc/passwd', () => {
-        expect(() => validateTLSCertPath('/etc/passwd', 'ca')).toThrow(SecurityError);
+      it('should reject attack from GAP_ANALYSIS.md: /etc/passwd', async () => {
+        await expect(validateTLSCertPath('/etc/passwd', 'ca')).rejects.toThrow(SecurityError);
       });
 
-      it('should reject attack from GAP_ANALYSIS.md: ../../../etc/shadow', () => {
-        expect(() => validateTLSCertPath('../../../etc/shadow', 'cert')).toThrow(SecurityError);
+      it('should reject attack from GAP_ANALYSIS.md: ../../../etc/shadow', async () => {
+        await expect(validateTLSCertPath('../../../etc/shadow', 'cert')).rejects.toThrow(
+          SecurityError
+        );
       });
     });
 
     describe('edge cases', () => {
-      it('should reject empty paths', () => {
-        expect(() => validateTLSCertPath('', 'tlsCA')).toThrow(SecurityError);
+      it('should reject empty paths', async () => {
+        await expect(validateTLSCertPath('', 'tlsCA')).rejects.toThrow(SecurityError);
       });
 
-      it('should handle Windows-style paths', () => {
+      it('should handle Windows-style paths', async () => {
         // Should normalize backslashes and detect traversal
-        expect(() => validateTLSCertPath('..\\..\\etc\\passwd', 'tlsCA')).toThrow(SecurityError);
+        await expect(validateTLSCertPath('..\\..\\etc\\passwd', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
       });
 
-      it('should handle duplicate slashes', () => {
+      it('should handle duplicate slashes', async () => {
         // Should normalize but still detect issues
-        expect(() => validateTLSCertPath('/etc//passwd', 'tlsCA')).toThrow(SecurityError);
+        await expect(validateTLSCertPath('/etc//passwd', 'tlsCA')).rejects.toThrow(SecurityError);
       });
     });
 
     // GAP #21: Expanded sensitive path blocklist tests
     describe('expanded sensitive path blocklist', () => {
-      it('should reject paths to /root/', () => {
-        expect(() => validateTLSCertPath('/root/.bashrc', 'tlsCA')).toThrow(SecurityError);
+      it('should reject paths to /root/', async () => {
+        await expect(validateTLSCertPath('/root/.bashrc', 'tlsCA')).rejects.toThrow(SecurityError);
       });
 
-      it('should reject paths to SSH directories', () => {
-        expect(() => validateTLSCertPath('/home/user/.ssh/id_rsa', 'tlsCA')).toThrow(SecurityError);
-        expect(() => validateTLSCertPath('/root/.ssh/authorized_keys', 'tlsCA')).toThrow(
+      it('should reject paths to SSH directories', async () => {
+        await expect(validateTLSCertPath('/home/user/.ssh/id_rsa', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
+        await expect(validateTLSCertPath('/root/.ssh/authorized_keys', 'tlsCA')).rejects.toThrow(
           SecurityError
         );
       });
 
-      it('should reject paths to Kubernetes secrets', () => {
-        expect(() =>
+      it('should reject paths to Kubernetes secrets', async () => {
+        await expect(
           validateTLSCertPath('/var/run/secrets/kubernetes.io/serviceaccount/token', 'tlsCA')
-        ).toThrow(SecurityError);
-        expect(() => validateTLSCertPath('/run/secrets/mysecret', 'tlsCA')).toThrow(SecurityError);
-      });
-
-      it('should reject paths to AWS credentials', () => {
-        expect(() => validateTLSCertPath('/home/user/.aws/credentials', 'tlsCA')).toThrow(
+        ).rejects.toThrow(SecurityError);
+        await expect(validateTLSCertPath('/run/secrets/mysecret', 'tlsCA')).rejects.toThrow(
           SecurityError
         );
-        expect(() => validateTLSCertPath('/root/.aws/config', 'tlsCA')).toThrow(SecurityError);
       });
 
-      it('should reject paths to GCP credentials', () => {
-        expect(() =>
+      it('should reject paths to AWS credentials', async () => {
+        await expect(validateTLSCertPath('/home/user/.aws/credentials', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
+        await expect(validateTLSCertPath('/root/.aws/config', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
+      });
+
+      it('should reject paths to GCP credentials', async () => {
+        await expect(
           validateTLSCertPath(
             '/home/user/.config/gcloud/application_default_credentials.json',
             'tlsCA'
           )
-        ).toThrow(SecurityError);
+        ).rejects.toThrow(SecurityError);
       });
 
-      it('should reject paths to Azure credentials', () => {
-        expect(() => validateTLSCertPath('/home/user/.azure/azureProfile.json', 'tlsCA')).toThrow(
-          SecurityError
-        );
+      it('should reject paths to Azure credentials', async () => {
+        await expect(
+          validateTLSCertPath('/home/user/.azure/azureProfile.json', 'tlsCA')
+        ).rejects.toThrow(SecurityError);
       });
 
-      it('should reject paths to .env files', () => {
-        expect(() => validateTLSCertPath('/app/.env', 'tlsCA')).toThrow(SecurityError);
-        expect(() => validateTLSCertPath('/var/www/app/.env.production', 'tlsCA')).toThrow(
+      it('should reject paths to .env files', async () => {
+        await expect(validateTLSCertPath('/app/.env', 'tlsCA')).rejects.toThrow(SecurityError);
+        await expect(validateTLSCertPath('/var/www/app/.env.production', 'tlsCA')).rejects.toThrow(
           SecurityError
         );
       });
@@ -588,16 +617,28 @@ describe('validate', () => {
     // Note: These tests verify the symlink detection code path exists
     // Actual symlink testing requires creating real symlinks which is environment-specific
     describe('symlink handling', () => {
-      it('should handle non-existent paths gracefully (validation still performed)', () => {
+      it('should handle non-existent paths gracefully (validation still performed)', async () => {
         // Non-existent path should pass string validation (file existence is checked later)
-        expect(() => validateTLSCertPath('/nonexistent/path/to/cert.pem', 'tlsCA')).not.toThrow();
+        await expect(
+          validateTLSCertPath('/nonexistent/path/to/cert.pem', 'tlsCA')
+        ).resolves.toBeUndefined();
       });
 
-      it('should reject path even if symlink target validation would fail', () => {
+      it('should reject path even if symlink target validation would fail', async () => {
         // If we had a symlink /tmp/link -> /etc/passwd, the resolved path should be blocked
         // This tests that the blocklist check works for resolved paths
         // We can't create real symlinks in tests, but we test the blocklist includes SSH paths
-        expect(() => validateTLSCertPath('/something/.ssh/key', 'tlsCA')).toThrow(SecurityError);
+        await expect(validateTLSCertPath('/something/.ssh/key', 'tlsCA')).rejects.toThrow(
+          SecurityError
+        );
+      });
+    });
+
+    // PERF-11: Verify the function returns a Promise (is async)
+    describe('async behavior', () => {
+      it('should return a Promise', () => {
+        const result = validateTLSCertPath('/nonexistent/path/cert.pem', 'tlsCA');
+        expect(result).toBeInstanceOf(Promise);
       });
     });
   });

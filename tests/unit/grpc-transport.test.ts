@@ -90,9 +90,9 @@ vi.mock('../../src/proto.js', () => ({
   getProtoPath: vi.fn(() => '/fake/geode.proto'),
 }));
 
-// Mock validate.js
-vi.mock('../../src/validate.js', () => ({
-  validateTLSCertPath: vi.fn(),
+// Mock transport.js to provide a stubbed buildTLSConfig
+vi.mock('../../src/transport.js', () => ({
+  buildTLSConfig: vi.fn().mockResolvedValue({ minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' }),
 }));
 
 import { GrpcTransport } from '../../src/grpc-transport.js';

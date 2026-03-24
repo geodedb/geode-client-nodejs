@@ -17,11 +17,9 @@
 
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
-import * as fs from 'node:fs';
 import type { GeodeConfig } from './config.js';
 import { getAddress } from './config.js';
 import { DriverError, StatusClass, TransportError, ErrClosed } from './errors.js';
-import { validateTLSCertPath } from './validate.js';
 import {
   getProtoPath,
   type QuicClientMessage,
@@ -33,7 +31,7 @@ import {
   type CommitResponse,
   type RollbackResponse,
 } from './proto.js';
-import type { Transport } from './transport.js';
+import { type Transport, buildTLSConfig } from './transport.js';
 
 // Get proto path from proto.ts (which handles CJS/ESM compatibility)
 const PROTO_PATH = getProtoPath();
@@ -636,39 +634,35 @@ export class GrpcTransport implements Transport {
 
 /**
  * Build SSL options for gRPC from GeodeConfig.
+ *
+ * Delegates to buildTLSConfig() for cert/key loading and validation,
+ * then converts the result to gRPC's expected Buffer format (QUAL-R3).
  */
 async function buildGrpcSslOptions(cfg: GeodeConfig): Promise<{
   rootCerts: Buffer | null;
   privateKey: Buffer | null;
   certChain: Buffer | null;
 }> {
-  let rootCerts: Buffer | null = null;
-  let privateKey: Buffer | null = null;
-  let certChain: Buffer | null = null;
+  const tlsConfig = await buildTLSConfig(cfg);
 
-  // Load CA certificate
-  if (cfg.tlsCACert) {
-    rootCerts = Buffer.from(cfg.tlsCACert);
-  } else if (cfg.tlsCA) {
-    validateTLSCertPath(cfg.tlsCA, 'tlsCA');
-    rootCerts = await fs.promises.readFile(cfg.tlsCA);
-  }
+  // buildTLSConfig only produces string | undefined values (from readFile or PEM),
+  // but the tls.SecureContextOptions type signature is broader. We narrow with a
+  // runtime check and cast the well-known subset.
+  const toBuffer = (value: unknown): Buffer | null => {
+    if (value === undefined || value === null) return null;
+    if (Buffer.isBuffer(value)) return value;
+    if (typeof value === 'string') return Buffer.from(value);
+    if (Array.isArray(value)) {
+      return Buffer.concat(
+        value.map((v: unknown) => (Buffer.isBuffer(v) ? v : Buffer.from(String(v))))
+      );
+    }
+    return null;
+  };
 
-  // Load client certificate for mTLS
-  if (cfg.tlsCertPEM) {
-    certChain = Buffer.from(cfg.tlsCertPEM);
-  } else if (cfg.tlsCert) {
-    validateTLSCertPath(cfg.tlsCert, 'tlsCert');
-    certChain = await fs.promises.readFile(cfg.tlsCert);
-  }
-
-  // Load client key for mTLS
-  if (cfg.tlsKeyPEM) {
-    privateKey = Buffer.from(cfg.tlsKeyPEM);
-  } else if (cfg.tlsKey) {
-    validateTLSCertPath(cfg.tlsKey, 'tlsKey');
-    privateKey = await fs.promises.readFile(cfg.tlsKey);
-  }
-
-  return { rootCerts, privateKey, certChain };
+  return {
+    rootCerts: toBuffer(tlsConfig.ca),
+    privateKey: toBuffer(tlsConfig.key),
+    certChain: toBuffer(tlsConfig.cert),
+  };
 }

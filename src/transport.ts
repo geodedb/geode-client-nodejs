@@ -63,7 +63,7 @@ export async function buildTLSConfig(cfg: GeodeConfig): Promise<tls.SecureContex
     options.ca = cfg.tlsCACert;
   } else if (cfg.tlsCA) {
     // GAP #12: Validate path to prevent directory traversal attacks
-    validateTLSCertPath(cfg.tlsCA, 'tlsCA');
+    await validateTLSCertPath(cfg.tlsCA, 'tlsCA');
     try {
       options.ca = await fs.promises.readFile(cfg.tlsCA, 'utf-8');
     } catch (e) {
@@ -79,7 +79,7 @@ export async function buildTLSConfig(cfg: GeodeConfig): Promise<tls.SecureContex
     options.cert = cfg.tlsCertPEM;
   } else if (cfg.tlsCert) {
     // GAP #12: Validate path to prevent directory traversal attacks
-    validateTLSCertPath(cfg.tlsCert, 'tlsCert');
+    await validateTLSCertPath(cfg.tlsCert, 'tlsCert');
     try {
       options.cert = await fs.promises.readFile(cfg.tlsCert, 'utf-8');
     } catch (e) {
@@ -95,7 +95,7 @@ export async function buildTLSConfig(cfg: GeodeConfig): Promise<tls.SecureContex
     options.key = cfg.tlsKeyPEM;
   } else if (cfg.tlsKey) {
     // GAP #12: Validate path to prevent directory traversal attacks
-    validateTLSCertPath(cfg.tlsKey, 'tlsKey');
+    await validateTLSCertPath(cfg.tlsKey, 'tlsKey');
     try {
       options.key = await fs.promises.readFile(cfg.tlsKey, 'utf-8');
     } catch (e) {

@@ -824,17 +824,16 @@ function checkAgainstBlocklist(normalizedPath: string, fieldName: string): void 
 }
 
 /**
- * Validate a file path for TLS certificate loading.
+ * Validate a file path for TLS certificate loading (synchronous string checks only).
  *
- * Prevents path traversal attacks by ensuring paths are absolute and don't
- * contain directory traversal sequences. Also resolves symlinks to prevent
- * TOCTOU attacks where a symlink points to a restricted file.
+ * Performs all synchronous validations: empty check, null bytes, path traversal,
+ * encoded traversal, and blocklist checks. Does NOT perform filesystem I/O.
  *
  * @param path - The file path to validate
  * @param fieldName - The field name for error messages (e.g., 'tlsCA', 'tlsCert')
  * @throws SecurityError if the path is invalid or contains traversal sequences
  */
-export function validateTLSCertPath(path: string, fieldName: string): void {
+function validateTLSCertPathSync(path: string, fieldName: string): void {
   if (!path) {
     throw new SecurityError({
       type: 'input',
@@ -881,27 +880,45 @@ export function validateTLSCertPath(path: string, fieldName: string): void {
 
   // GAP #21: Check original path against expanded blocklist
   checkAgainstBlocklist(normalizedPath, fieldName);
+}
+
+/**
+ * Validate a file path for TLS certificate loading.
+ *
+ * Prevents path traversal attacks by ensuring paths are absolute and don't
+ * contain directory traversal sequences. Also resolves symlinks to prevent
+ * TOCTOU attacks where a symlink points to a restricted file.
+ *
+ * Uses async filesystem operations to avoid blocking the event loop (PERF-11).
+ *
+ * @param path - The file path to validate
+ * @param fieldName - The field name for error messages (e.g., 'tlsCA', 'tlsCert')
+ * @throws SecurityError if the path is invalid or contains traversal sequences
+ */
+export async function validateTLSCertPath(path: string, fieldName: string): Promise<void> {
+  // Run all synchronous string-based validations first
+  validateTLSCertPathSync(path, fieldName);
 
   // GAP #20: Resolve symlinks to prevent TOCTOU attacks
   // If the file exists, check if it's a symlink and validate the resolved path
+  // Uses async fs operations to avoid blocking the event loop (PERF-11)
   try {
-    if (fs.existsSync(path)) {
-      const stats = fs.lstatSync(path);
-      if (stats.isSymbolicLink()) {
-        // Resolve the symlink and validate the target path
-        const resolvedPath = fs.realpathSync(path);
-        const normalizedResolved = resolvedPath.replace(/\\/g, '/').replace(/\/+/g, '/');
+    await fs.promises.access(path);
+    const stats = await fs.promises.lstat(path);
+    if (stats.isSymbolicLink()) {
+      // Resolve the symlink and validate the target path
+      const resolvedPath = await fs.promises.realpath(path);
+      const normalizedResolved = resolvedPath.replace(/\\/g, '/').replace(/\/+/g, '/');
 
-        // Check resolved path against blocklist
-        checkAgainstBlocklist(normalizedResolved, fieldName);
+      // Check resolved path against blocklist
+      checkAgainstBlocklist(normalizedResolved, fieldName);
 
-        // Check resolved path for traversal (shouldn't happen after realpath, but defense-in-depth)
-        if (normalizedResolved.includes('/../') || normalizedResolved.endsWith('/..')) {
-          throw new SecurityError({
-            type: 'input',
-            message: `${fieldName} symlink resolves to a path with directory traversal`,
-          });
-        }
+      // Check resolved path for traversal (shouldn't happen after realpath, but defense-in-depth)
+      if (normalizedResolved.includes('/../') || normalizedResolved.endsWith('/..')) {
+        throw new SecurityError({
+          type: 'input',
+          message: `${fieldName} symlink resolves to a path with directory traversal`,
+        });
       }
     }
   } catch (e) {
@@ -909,7 +926,8 @@ export function validateTLSCertPath(path: string, fieldName: string): void {
     if (e instanceof SecurityError) {
       throw e;
     }
-    // For other errors (e.g., permission denied), we continue with just the string validation
-    // The actual file read will fail later with a more specific error
+    // For other errors (e.g., permission denied, file not found), we continue
+    // with just the string validation. The actual file read will fail later
+    // with a more specific error.
   }
 }
