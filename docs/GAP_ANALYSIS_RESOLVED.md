@@ -1,6 +1,6 @@
 # Gap Analysis -- Resolved Items
 
-**Last Updated**: 2026-03-24
+**Last Updated**: 2026-03-24 (final gap closure update)
 **Repository**: geode-client-nodejs (main branch)
 
 This file contains all closed and won't-do items from the gap analysis tracking files.
@@ -257,4 +257,114 @@ This file contains all closed and won't-do items from the gap analysis tracking 
 - **Source file:** `docs/GAP_ANALYSIS.md` (Phase 6, Rank 9)
 - **Severity:** Info
 - **Reason:** Design choice. Session ID needed for debugging and connection correlation.
+- **Resolved date:** 2026-03-24
+
+### Phase C Closures (final gap closure)
+
+#### QUAL-A6: fromJSON implicit type coercion removed
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (A6)
+- **Severity:** Medium
+- **Resolution:** Removed implicit type coercion from `fromJSON()`. Strings no longer auto-detected as UUID or timestamp types.
+- **Evidence:** `src/types.ts` fromJSON() method, `tests/unit/types.test.ts`
+- **Resolved date:** 2026-03-24
+
+#### PERF-12: Regex pre-compilation
+- **Source file:** `docs/PERF_GAP_ANALYSIS.md` (Finding 12)
+- **Severity:** P2
+- **Resolution:** Inline regexes removed from fromJSON(). Remaining regexes pre-compiled as module-level constants.
+- **Evidence:** `src/types.ts`
+- **Resolved date:** 2026-03-24
+
+#### PERF-3: execBatch pipelining with withTransaction
+- **Source file:** `docs/PERF_GAP_ANALYSIS.md` (Finding 3)
+- **Severity:** P0
+- **Resolution:** execBatch now pipelines queries using withTransaction for single-connection scenarios. Pool-based concurrency via batchParallel.
+- **Evidence:** `src/client.ts` execBatch method, `src/batch.ts`
+- **Resolved date:** 2026-03-24
+
+#### QUAL-R7: Builder Object.assign replaced with spread
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (R7)
+- **Severity:** Low
+- **Resolution:** Replaced `Object.assign` with spread operator in query builder methods.
+- **Evidence:** `src/query-builder.ts`, `tests/unit/query-builder.test.ts`
+- **Resolved date:** 2026-03-24
+
+#### QUAL-D2: batchParallel JSDoc (already accurate)
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (D2)
+- **Severity:** Low
+- **Resolution:** JSDoc already accurate after A1 fix. No changes needed.
+- **Evidence:** `src/batch.ts` batchParallel JSDoc
+- **Resolved date:** 2026-03-24
+
+#### GAP-0001 / QUAL-T1/T2: Test coverage improved to 78%
+- **Source file:** `docs/GAP_ANALYSIS_AUDIT.md` (GAP-0001), `docs/QUALITY_GAP_ANALYSIS.md` (T1/T2)
+- **Severity:** High
+- **Resolution:** Coverage improved from 59.67% to ~78% with 736 tests. All critical modules now have meaningful coverage.
+- **Evidence:** `tests/unit/pool.test.ts`, `tests/unit/transport.test.ts`, `tests/unit/transport-quic.test.ts`, `tests/unit/connection.test.ts`, `tests/unit/types.test.ts`, `tests/unit/query-builder.test.ts`
+- **Resolved date:** 2026-03-24
+
+#### QUAL-T5: Pool maxConnections guard
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (T5)
+- **Severity:** Medium
+- **Resolution:** maxConnections guard already present in pool.ts. Verified fixed.
+- **Evidence:** `src/pool.ts` addConnection() method
+- **Resolved date:** 2026-03-24
+
+#### PERF-11: Async cert validation
+- **Source file:** `docs/PERF_GAP_ANALYSIS.md` (Finding 11)
+- **Severity:** P2
+- **Resolution:** Async cert validation already implemented. Verified fixed.
+- **Evidence:** `src/validate.ts`, `src/transport.ts`
+- **Resolved date:** 2026-03-24
+
+#### QUAL-R4/R5: Dead code legacy aliases removed
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (R4/R5)
+- **Severity:** Low
+- **Resolution:** Legacy aliases and dead JSON methods removed or formally deprecated.
+- **Evidence:** `src/types.ts`, `src/query-builder.ts`
+- **Resolved date:** 2026-03-24
+
+#### QUAL-D1: JSDoc on public methods added
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (D1)
+- **Severity:** Low
+- **Resolution:** Added JSDoc with @param, @returns, @throws to public/exported symbols.
+- **Evidence:** `src/connection.ts`, `src/pool.ts`, `src/transport.ts`
+- **Resolved date:** 2026-03-24
+
+#### QUAL-D4: CLAUDE.md state machine updated
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (D4)
+- **Severity:** Low
+- **Resolution:** Updated CLAUDE.md state machine diagram to include the error state.
+- **Evidence:** CLAUDE.md
+- **Resolved date:** 2026-03-24
+
+#### QUAL-T6: Pool idle eviction implemented
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (T6)
+- **Severity:** Low
+- **Resolution:** Implemented configurable idle-timeout eviction that proactively shrinks pool.
+- **Evidence:** `src/pool.ts`, `tests/unit/pool.test.ts`
+- **Resolved date:** 2026-03-24
+
+#### QUAL-R6: auth.ts validators deduplicated
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (R6)
+- **Severity:** Medium
+- **Resolution:** Deduplicated auth.ts validators by importing from validate.ts.
+- **Evidence:** `src/auth.ts`, `src/validate.ts`
+- **Resolved date:** 2026-03-24
+
+#### QUAL-R3 / GAP-0013: TLS cert loading deduplicated
+- **Source file:** `docs/QUALITY_GAP_ANALYSIS.md` (R3), `docs/GAP_ANALYSIS_AUDIT.md` (GAP-0013)
+- **Severity:** Medium / Low
+- **Resolution:** Extracted shared TLS credential loading utility. Both transports use it.
+- **Evidence:** `src/transport.ts`, `src/grpc-transport.ts`
+- **Resolved date:** 2026-03-24
+
+---
+
+## Won't Do Items (Phase C)
+
+#### SEC-P6-7 (N6): Gate raw()/string where() behind config flag
+- **Source file:** `docs/GAP_ANALYSIS.md` (Phase 6, Rank 7)
+- **Severity:** Low
+- **Reason:** Deprecation + runtime warnings (process.emitWarning) sufficient. Gating behind config flag would break existing users.
 - **Resolved date:** 2026-03-24

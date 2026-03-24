@@ -12,22 +12,23 @@
 | Critical | 0                | 1                | 0                | 0                | 0                | 0       | 0          |
 | High     | 3                | 1                | 2                | 1                | 0                | 0       | 0          |
 | Medium   | 3                | 2                | 0                | 0                | 1                | 2 Closed, 1 Won't Do | 0 |
-| Low      | 4                | 2                | 4                | 3                | 3                | 3 Closed, 1 Open | 1 |
+| Low      | 4                | 2                | 4                | 3                | 3                | 3 Closed, 1 Won't Do | 0 |
 | Info     | 0                | 0                | 0                | 0                | 1                | 1 Closed, 1 Won't Do | 0 |
-| **Total**| **10**           | **6**            | **6**            | **4**            | **5**            | **6 Closed, 2 Won't Do, 1 Open** | **1** |
+| **Total**| **10**           | **6**            | **6**            | **4**            | **5**            | **6 Closed, 3 Won't Do** | **0** |
 
 ### Remaining Open Items
 
-1. **LOW: raw()/string where() still callable** -- Deprecated but not removed or gated behind opt-in. Existing JSDoc security warnings are in place.
+None. All security findings are closed or won't-do.
 
 ### Won't Do Items
 
 1. **SEC-P6-3 (D1): Dependency vulnerabilities** -- Won't Do. Transitive dependency management; vulnerabilities are in dev-only or deeply transitive deps not controllable by this project.
 2. **SEC-P6-9 (I1): Session ID getter** -- Won't Do. INFO severity; session ID is needed for debugging and connection correlation. Not a material security risk.
+3. **SEC-P6-7 (N6): Gate raw()/string where() behind config flag** -- Won't Do. Runtime deprecation warnings with `process.emitWarning()` have been added. Documentation warnings are comprehensive. Gating behind a config flag would break existing users; deprecation + warnings are sufficient.
 
 ---
 
-## Phase 6: Adversarial Review Findings (6 Closed, 2 Won't Do, 1 Open)
+## Phase 6: Adversarial Review Findings (6 Closed, 3 Won't Do, 0 Open)
 
 | Rank | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence | Status |
 |------|----------|------------|---------|-----------|-----------|----------|--------|
@@ -37,7 +38,7 @@
 | 4 | **Low** | 35 | SEC-P6-4: gRPC transport missing production insecureSkipVerify guard - QUIC has it, gRPC does not | src/grpc-transport.ts | CWE-295, A07:2021 | grpc-transport.ts:113-126 | **Closed** -- Ported NODE_ENV/GEODE_ENV production check from QUIC transport. Commits 68b7aea-22726e2. |
 | 5 | **Low** | 30 | SEC-P6-5: gRPC max message size 100 MB vs QUIC 16 MiB (6.25x larger) - inconsistent DoS surface | src/grpc-transport.ts | CWE-400, A05:2021 | grpc-transport.ts:138 | **Closed** -- Aligned gRPC max message size with QUIC (16 MiB) or made configurable. Commits 68b7aea-22726e2. |
 | 6 | **Low** | 25 | SEC-P6-6: propsToGQL() lacks internal key validation (defense-in-depth; all current callers validate) | src/query-builder.ts | CWE-943, A03:2021 | query-builder.ts:819-821 | **Closed** -- Added key validation in propsToGQL() as defense-in-depth. Commits 68b7aea-22726e2. |
-| 7 | **Low** | 20 | raw()/string where() still callable (deprecated but not removed or gated behind opt-in) | src/query-builder.ts | CWE-943, A03:2021 | query-builder.ts:525,768,625 | **Open** |
+| 7 | **Low** | 20 | raw()/string where() still callable (deprecated with runtime warnings, not gated behind opt-in) | src/query-builder.ts | CWE-943, A03:2021 | query-builder.ts:525,768,625 | **Won't Do** -- Runtime deprecation warnings added via `process.emitWarning()`. Gating behind config flag would break existing users; deprecation + warnings are sufficient. |
 | 8 | **Info** | 15 | SEC-P6-8 (N4): Object.assign(config, options) mutation - caller's options object is not defensively copied | src/client.ts | CWE-915 | client.ts:54 | **Closed** -- Renamed to QUAL-R1 and fixed: replaced `Object.assign(config, options)` with spread `{ ...config, ...options }`. See QUALITY_GAP_ANALYSIS.md R1. Commits 68b7aea-22726e2. |
 | 9 | **Info** | 10 | SEC-P6-9 (I1): Session ID exposed as public getter - information disclosure risk if logged or serialized | src/connection.ts | -- | connection.ts:202-204 | **Won't Do** -- INFO severity; session ID is needed for debugging and connection correlation. Not a material security risk. |
 
@@ -56,10 +57,7 @@
 
 - SEC-P6-3 (D1): Dependency vulnerabilities -- Won't Do (transitive dep management)
 - SEC-P6-9 (I1): Session ID getter -- Won't Do (INFO severity, design choice)
-
-**Remaining Open:**
-
-- N6: Gate raw()/string where() behind an explicit opt-in flag (e.g., `allowRawQueries: true` in client config)
+- SEC-P6-7 (N6): Gate raw()/string where() behind config flag -- Won't Do (deprecation + runtime warnings sufficient)
 
 ---
 
@@ -473,9 +471,10 @@ if (!isValidPort(port)) {
 
 ### Weaknesses (Remaining)
 
-After Phase A/B gap closure, 1 open finding remains:
+After Phase A/B/C gap closure, 0 open security findings remain. All items are closed or won't-do.
 
-1. **Deprecated unsafe APIs still callable** - `raw()` and string `where()` remain available without opt-in gating, relying solely on documentation warnings.
+Previously open:
+1. **Deprecated unsafe APIs** - `raw()` and string `where()` now emit runtime deprecation warnings via `process.emitWarning()`. Gating behind a config flag was marked Won't Do as it would break existing users.
 
 Previously open items now resolved:
 - Prototype pollution in proto.ts and types.ts -- **Closed** (commits 68b7aea-22726e2)
@@ -485,10 +484,6 @@ Previously open items now resolved:
 - Session ID getter -- **Won't Do** (INFO severity, design choice)
 
 ### Recommendations
-
-#### Remaining (Phase 6)
-
-1. **Gate deprecated raw() APIs** - Move raw()/string where() behind an explicit opt-in flag
 
 #### Maintenance
 

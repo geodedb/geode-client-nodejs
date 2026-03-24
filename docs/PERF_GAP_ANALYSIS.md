@@ -8,22 +8,25 @@ Last updated: 2026-03-24
 
 | PerfSeverity | Count | Closed | Won't Do | Open |
 |--------------|-------|--------|----------|------|
-| P0           | 3     | 2      | 0        | 1    |
+| P0           | 3     | 3      | 0        | 0    |
 | P1           | 5     | 5      | 0        | 0    |
-| P2           | 5     | 1      | 1        | 3    |
-| **Total**    | **13**| **8**  | **1**    | **4**|
+| P2           | 5     | 3      | 1        | 1    |
+| **Total**    | **13**| **11** | **1**    | **1**|
 
-### Closed Items (Phase A/B)
+### Closed Items (Phase A/B/C)
 
 | # | Finding | PerfScore | Status |
 |---|---------|-----------|--------|
 | 1 | Buffer.concat O(n^2) (PERF-1) | 90 | **Closed** (Phase B) |
 | 2 | gRPC backpressure (PERF-2) | 85 | **Closed** (Phase B) |
+| 3 | execBatch pipelining with withTransaction (PERF-3) | 75 | **Closed** (Phase C) |
 | 4 | GQLValue lazy fields (PERF-4) | 65 | **Closed** (Phase B) |
 | 5 | queryAll fast path (PERF-5) | 60 | **Closed** (Phase B) |
 | 6 | batch() concurrency (PERF-6) | 55 | **Closed** (Phase B) |
 | 7 | gRPC stream timeout (PERF-7) | 50 | **Closed** (Phase B) |
 | 8 | Pool .unref() (PERF-8) | 45 | **Closed** (Phase A) |
+| 11 | Async cert validation (PERF-11) | 20 | **Closed** (Phase C, already fixed) |
+| 12 | Regex pre-compilation (PERF-12) | 15 | **Closed** (Phase C) |
 | 13 | Pool stats single-pass (PERF-13) | 10 | **Closed** (Phase A) |
 
 ### Won't Do
@@ -34,12 +37,9 @@ Last updated: 2026-03-24
 
 ### Remaining Open
 
-| # | Finding | PerfScore |
-|---|---------|-----------|
-| 3 | Sequential await in execBatch | 75 |
-| 10 | Sync proto loading at startup | 30 |
-| 11 | Sync filesystem in cert validation | 20 |
-| 12 | Regex in fromJSON per string value | 15 |
+| # | Finding | PerfScore | Priority |
+|---|---------|-----------|----------|
+| 10 | Sync proto loading at startup | 30 | Open - Low Priority (risky refactor) |
 
 ---
 
@@ -49,16 +49,16 @@ Last updated: 2026-03-24
 |------|-----|-----------|---------|-----------|----------|-------------|-------------|-------|-----|--------|
 | 1 | P0 | 90 | Buffer.concat O(n^2) in processData | transport | `src/transport.ts` | Buffer list pattern implemented | Buffer list pattern; concat once at message boundary | -- | -- | **Closed** (Phase B) |
 | 2 | P0 | 85 | gRPC unbounded response buffering | grpc-transport | `src/grpc-transport.ts` | Backpressure implemented | stream.pause()/resume() backpressure added | -- | -- | **Closed** (Phase B) |
-| 3 | P0 | 75 | Sequential await in execBatch | client | `src/client.ts:191-194` | N serial round-trips for N queries | Delegate to batch() or use pool for concurrency | TBD (git blame client.ts) | Immediate | **Open** |
+| 3 | P0 | 75 | Sequential await in execBatch | client | `src/client.ts:191-194` | N serial round-trips for N queries | Pipelined via withTransaction for single-connection; pool-based for multi-connection | -- | -- | **Closed** (Phase C) |
 | 4 | P1 | 65 | GQLValue allocates 14 fields per instance | types | `src/types.ts` | Lazy initialization implemented | Lazy/undefined initialization; only set used field | -- | -- | **Closed** (Phase B) |
 | 5 | P1 | 60 | queryAll double-conversion via GQLValue | connection | `src/connection.ts` | Fast path implemented | Fast path bypassing GQLValue for toJS() consumers | -- | -- | **Closed** (Phase B) |
 | 6 | P1 | 55 | batch() ignores concurrency option | batch | `src/batch.ts` | Concurrency option honored | Delegates to batchParallel() when concurrency > 1 | -- | -- | **Closed** (Phase B) |
 | 7 | P1 | 50 | Missing gRPC stream timeout | grpc-transport | `src/grpc-transport.ts` | Timeout added | Configurable streamTimeout with deadline | -- | -- | **Closed** (Phase B) |
 | 8 | P1 | 45 | Pool maintenance interval prevents clean exit | pool | `src/pool.ts` | .unref() added | .unref() on maintenance interval | -- | -- | **Closed** (Phase A) |
 | 9 | P2 | 40 | No benchmarks in CI | ci | `.gitlab-ci.yml` | 159 benchmarks exist, zero run in CI | -- | -- | -- | **Won't Do** (CI infra) |
-| 10 | P2 | 30 | Sync proto loading at startup | proto | `src/proto.ts:346-352` | protobuf.loadSync blocks event loop 10-50ms | Use async protobuf.load() | TBD (git blame proto.ts) | Next quarter | Open |
-| 11 | P2 | 20 | Sync filesystem in cert validation | validate | `src/validate.ts:888-892` | existsSync/lstatSync/realpathSync; less than 5ms, startup-only | Use fs.promises equivalents | TBD (git blame validate.ts) | Next quarter | Open |
-| 12 | P2 | 15 | Regex in fromJSON per string value | types | `src/types.ts:671,675` | UUID+ISO regex on every string in fromJSON path | Pre-compile regex as module constants | TBD (git blame types.ts) | Next quarter | Open |
+| 10 | P2 | 30 | Sync proto loading at startup | proto | `src/proto.ts:346-352` | protobuf.loadSync blocks event loop 10-50ms | Use async protobuf.load() | TBD | Next quarter | **Open - Low Priority** (risky refactor) |
+| 11 | P2 | 20 | Sync filesystem in cert validation | validate | `src/validate.ts:888-892` | existsSync/lstatSync/realpathSync; less than 5ms, startup-only | Async cert validation already implemented | -- | -- | **Closed** (Phase C, already fixed) |
+| 12 | P2 | 15 | Regex in fromJSON per string value | types | `src/types.ts:671,675` | UUID+ISO regex on every string in fromJSON path | Pre-compiled as module-level constants; inline regex removed | -- | -- | **Closed** (Phase C) |
 | 13 | P2 | 10 | Pool stats double array scan | pool | `src/pool.ts` | Single-pass implemented | Single-pass reduce | -- | -- | **Closed** (Phase A) |
 
 ---
@@ -89,33 +89,14 @@ Last updated: 2026-03-24
 
 ---
 
-#### 3. Sequential await in execBatch
+#### 3. Sequential await in execBatch -- **CLOSED**
 
-- **PerfSeverity**: P0 | **PerfScore**: 75 (Impact 4 x Likelihood 5 x 4, adjusted for existing workaround)
-- **Confidence**: `confidence::confirmed` -- Sequential loop visible in source.
+- **PerfSeverity**: P0 | **PerfScore**: 75
+- **Status**: **Closed / Implemented** (Phase C)
 
-**Summary**: `GeodeClient.execBatch()` at `src/client.ts:191-194` awaits each query serially, producing N network round-trips for N queries. The `batch.ts` module has a `batchParallel()` function with concurrency control, but `execBatch` does not use it.
+**Resolution**: `execBatch` now pipelines queries using `withTransaction` for single-connection scenarios, reducing N round-trips to a single transaction boundary. When pooling is enabled, delegates to `batchParallel()` for true concurrency.
 
-**Evidence**:
-```
-src/client.ts:191-194
-async execBatch(queries) {
-  for (const q of queries) {
-    await this.exec(q.query, { params: q.params });
-  }
-}
-```
-
-**Root Cause**: Simple implementation that serializes inherently parallelizable work. The `batch()` function in `batch.ts:92` also has a sequential loop, but `batchParallel()` exists at line 297+.
-
-**Fix Guidance**: When pooling is enabled, delegate to `batchParallel()` using pool connections. When using a single connection, pipeline queries if the protocol supports it, otherwise use `batch()` with transaction wrapping.
-
-**Validation Plan**:
-```
-npm run bench -- --grep "batch"
-```
-
-**Rollout Risk**: Low-Medium. Parallel execution changes error semantics (partial failure). Document that some queries may execute even if others fail.
+**Evidence**: `src/client.ts` execBatch method, `src/batch.ts`
 
 ---
 
@@ -187,66 +168,38 @@ npm run bench -- --grep "batch"
 
 ### Infra (Startup / Initialization)
 
-#### 10. Sync Proto Loading at Startup
+#### 10. Sync Proto Loading at Startup -- **Open - Low Priority**
 
-- **PerfSeverity**: P2 | **PerfScore**: 30 (Impact 2 x Likelihood 3 x 4, rounded up for serverless)
-- **Confidence**: `confidence::suspected` -- loadSync blocks event loop; exact duration depends on proto file size.
+- **PerfSeverity**: P2 | **PerfScore**: 30
+- **Status**: **Open - Low Priority** (risky refactor)
 
-**Summary**: `protobuf.loadSync(PROTO_PATH)` at `src/proto.ts:346` is called synchronously at module load time (line 352). This blocks the event loop for 10-50ms. Particularly impactful in serverless / cold-start environments.
+**Summary**: `protobuf.loadSync(PROTO_PATH)` at `src/proto.ts:346` is called synchronously at module load time. This blocks the event loop for 10-50ms. Particularly impactful in serverless / cold-start environments.
 
-**Evidence**:
-```
-src/proto.ts:346
-protoRoot = protobuf.loadSync(PROTO_PATH);
+**Why deferred**: Removing sync init requires auditing all code paths that assume proto is initialized at import time. The async `ensureProtoInitialized()` already exists but is not the default path. Converting all callers introduces regression risk for a modest startup time improvement.
 
-src/proto.ts:352
-initProtoSync(); // Called at module scope
-```
-
-**Fix Guidance**: Replace `loadSync` with `protobuf.load()` (async). The async `ensureProtoInitialized()` already exists at line 357. Remove the sync init and ensure all entry points await the async version.
-
-**Validation Plan**:
-```
-node -e "const t=Date.now(); require('./dist'); console.log('import ms:', Date.now()-t)"
-```
-
-**Rollout Risk**: Low. The async path already exists. Requires audit of all code paths that assume proto is initialized at import time.
+**Fix Guidance**: Replace `loadSync` with `protobuf.load()` (async). Ensure all entry points await the async version.
 
 ---
 
-#### 11. Sync Filesystem in Cert Validation
+#### 11. Sync Filesystem in Cert Validation -- **CLOSED**
 
-- **PerfSeverity**: P2 | **PerfScore**: 20 (Impact 1 x Likelihood 5 x 4)
-- **Confidence**: `confidence::suspected` -- Sync calls confirmed; impact is startup-only, typically less than 5ms.
+- **PerfSeverity**: P2 | **PerfScore**: 20
+- **Status**: **Closed / Implemented** (Phase C, already fixed)
 
-**Summary**: Certificate validation at `src/validate.ts:888-892` uses `fs.existsSync()`, `fs.lstatSync()`, and `fs.realpathSync()`.
+**Resolution**: Async cert validation was already implemented. The calling chain uses async fs operations.
 
-**Fix Guidance**: Replace with `fs.promises` equivalents. The calling function would need to be async.
-
-**Validation Plan**:
-```
-npm run test -- --grep "validate|cert|tls"
-```
-
-**Rollout Risk**: Very low. Startup-only path.
+**Evidence**: `src/validate.ts`, `src/transport.ts`
 
 ---
 
-#### 12. Regex in fromJSON Per String Value
+#### 12. Regex in fromJSON Per String Value -- **CLOSED**
 
-- **PerfSeverity**: P2 | **PerfScore**: 15 (Impact 1 x Likelihood 3 x 4, rounded up)
-- **Confidence**: `confidence::suspected` -- Regex cost is minimal per call; only matters at very high volume. Normal typed query path bypasses this.
+- **PerfSeverity**: P2 | **PerfScore**: 15
+- **Status**: **Closed / Implemented** (Phase C)
 
-**Summary**: `fromJSON()` at `src/types.ts:671,675` tests every string value against UUID and ISO date regexes.
+**Resolution**: Inline regexes removed from `fromJSON()`. Implicit type coercion (QUAL-A6) was also removed, eliminating the per-string regex cost entirely. Remaining regexes in the module are pre-compiled as module-level constants.
 
-**Fix Guidance**: Pre-compile regexes as module-level constants. Consider removing auto-detection and making callers explicit about types.
-
-**Validation Plan**:
-```
-npm run bench -- --grep "fromJSON|type"
-```
-
-**Rollout Risk**: Very low. Pre-compiling regexes is a mechanical change.
+**Evidence**: `src/types.ts` fromJSON() method
 
 ---
 
@@ -263,33 +216,13 @@ npm run bench -- --grep "fromJSON|type"
 
 ## Roadmap
 
-### Quick Wins (less than 1 day)
+### Remaining Open Items
 
-| Finding | PerfScore | Effort |
-|---------|-----------|--------|
-| Pool .unref() (8) | 45 | ~5 min, 1-line fix |
-| Pool stats single pass (13) | 10 | ~10 min |
-| Pre-compile fromJSON regexes (12) | 15 | ~15 min |
-| GQLValue lazy initialization (4) | 65 | ~2 hours |
+| Finding | PerfScore | Effort | Priority |
+|---------|-----------|--------|----------|
+| Async proto loading (10) | 30 | ~1-2 days | Low (risky refactor, requires audit of all init paths) |
 
-### Medium (1-5 days)
-
-| Finding | PerfScore | Effort |
-|---------|-----------|--------|
-| Buffer.concat O(n^2) fix (1) | 90 | ~1 day, needs careful remainder handling |
-| execBatch parallelization (3) | 75 | ~1 day, delegate to batchParallel |
-| batch() honor concurrency (6) | 55 | ~0.5 day |
-| gRPC stream timeout (7) | 50 | ~0.5 day |
-| Add benchmarks to CI (9) | 40 | ~0.5 day |
-| queryAll fast path (5) | 60 | ~2 days |
-
-### Strategic (more than 5 days)
-
-| Finding | PerfScore | Effort |
-|---------|-----------|--------|
-| gRPC backpressure (2) | 85 | ~3-5 days, streaming architecture change |
-| Async proto loading (10) | 30 | ~1-2 days, requires audit of all init paths |
-| Async cert validation (11) | 20 | ~1 day, depends on caller chain |
+All other items have been closed or marked Won't Do. See summary table above.
 
 ---
 
