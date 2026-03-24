@@ -339,13 +339,36 @@ describe('types', () => {
       expect(fromJSON('hello').asString).toBe('hello');
     });
 
-    it('should detect UUID strings', () => {
+    it('should NOT implicitly coerce UUID strings (QUAL-A6)', () => {
       const v = fromJSON('550e8400-e29b-41d4-a716-446655440000');
+      expect(v.kind).toBe('STRING');
+      expect(v.asString).toBe('550e8400-e29b-41d4-a716-446655440000');
+    });
+
+    it('should NOT implicitly coerce ISO date strings (QUAL-A6)', () => {
+      const v = fromJSON('2024-01-15T10:30:00Z');
+      expect(v.kind).toBe('STRING');
+      expect(v.asString).toBe('2024-01-15T10:30:00Z');
+    });
+
+    it('should NOT implicitly coerce date-only strings (QUAL-A6)', () => {
+      const v = fromJSON('2024-01-01');
+      expect(v.kind).toBe('STRING');
+      expect(v.asString).toBe('2024-01-01');
+    });
+
+    it('should return UUID when typeHint is UUID', () => {
+      const v = fromJSON('550e8400-e29b-41d4-a716-446655440000', 'UUID');
       expect(v.kind).toBe('UUID');
     });
 
-    it('should detect ISO date strings', () => {
-      const v = fromJSON('2024-01-15T10:30:00Z');
+    it('should return TIMESTAMP when typeHint is TIMESTAMP', () => {
+      const v = fromJSON('2024-01-01', 'TIMESTAMP');
+      expect(v.kind).toBe('TIMESTAMP');
+    });
+
+    it('should return TIMESTAMP when typeHint is TIMESTAMPTZ', () => {
+      const v = fromJSON('2024-01-15T10:30:00Z', 'TIMESTAMPTZ');
       expect(v.kind).toBe('TIMESTAMP');
     });
 
@@ -655,11 +678,17 @@ describe('types', () => {
       expect(edgeValue.asEdge.startNode).toBe(nodeValue.asNode.id);
     });
 
-    it('should detect UUIDv7 as UUID type when standalone', () => {
+    it('should NOT implicitly coerce UUIDv7 to UUID type when standalone (QUAL-A6)', () => {
       const v = fromJSON(uuidv7Node1);
 
-      expect(v.kind).toBe('UUID');
+      expect(v.kind).toBe('STRING');
       expect(v.asString).toBe(uuidv7Node1);
+    });
+
+    it('should return UUID for UUIDv7 when typeHint is UUID', () => {
+      const v = fromJSON(uuidv7Node1, 'UUID');
+
+      expect(v.kind).toBe('UUID');
     });
   });
 

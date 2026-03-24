@@ -676,17 +676,6 @@ export function fromJSON(value: unknown, typeHint?: GQLValueKind): GQLValue {
   }
 
   if (typeof value === 'string') {
-    // Check for UUID pattern
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
-      return GQLValue.uuid(value);
-    }
-    // Check for ISO date
-    if (/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?/.test(value)) {
-      const date = new Date(value);
-      if (!isNaN(date.getTime())) {
-        return GQLValue.timestamp(date);
-      }
-    }
     return GQLValue.string(value);
   }
 
