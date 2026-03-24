@@ -87,7 +87,7 @@ include:
 
   - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.9.14
     inputs:
-      allow_failure: true
+      allow_failure: false
 
   # Publishing with OIDC trusted publishing (only on tags)
   # Requires trusted publisher configured on npmjs.com
@@ -98,7 +98,7 @@ include:
       package_scope: '@geodedb'
       access: 'public'
       environment: 'npm-publish'
-      provenance: false  # Requires GitLab-hosted runners
+      provenance: true  # Requires GitLab-hosted runners
 
   # Release creation
   - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.9.3

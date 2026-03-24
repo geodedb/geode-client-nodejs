@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { MockTransport, buildTLSConfig } from '../../src/transport.js';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { MockTransport, buildTLSConfig, QuicTransport } from '../../src/transport.js';
 import { TransportError, SecurityError } from '../../src/errors.js';
 import type { GeodeConfig } from '../../src/config.js';
 import type { QuicServerMessage } from '../../src/proto.js';
@@ -261,5 +261,55 @@ describe('buildTLSConfig', () => {
       expect(result.minVersion).toBe('TLSv1.3');
       expect(result.maxVersion).toBe('TLSv1.3');
     });
+  });
+});
+
+describe('QuicTransport buffer limits', () => {
+  it('should reject oversized message based on length prefix', () => {
+    // Create transport with 32-byte max message size
+    const transport = new QuicTransport('mock:3141', 32, 1024);
+    const internal = transport as unknown as { processData: (data: Buffer) => void };
+
+    // Craft a length-prefixed message with a declared size exceeding the limit
+    const buf = Buffer.alloc(4);
+    buf.writeUInt32BE(64, 0); // Declare 64-byte message, exceeds 32-byte limit
+    expect(() => internal.processData(buf)).toThrow(TransportError);
+    expect(transport.isClosed()).toBe(true);
+  });
+
+  it('should destroy QUIC client on oversize close', async () => {
+    const transport = new QuicTransport('mock:3141', 32, 1024);
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const internal = transport as unknown as {
+      processData: (data: Buffer) => void;
+      _client: { destroy: () => Promise<void> } | null;
+    };
+    internal._client = { destroy };
+
+    const buf = Buffer.alloc(4);
+    buf.writeUInt32BE(64, 0);
+    expect(() => internal.processData(buf)).toThrow(TransportError);
+
+    // Allow the async close() to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('should reject when accumulated buffer exceeds limit', () => {
+    // 1024 max message, 64-byte max buffer
+    const transport = new QuicTransport('mock:3141', 1024, 64);
+    const internal = transport as unknown as { processData: (data: Buffer) => void };
+
+    // Feed raw data that accumulates without forming a complete message
+    // (incomplete length prefix data that exceeds buffer limit)
+    const chunk = Buffer.alloc(40);
+    chunk.writeUInt32BE(200, 0); // Declare 200 bytes needed, won't complete
+
+    // First chunk: 40 bytes in buffer, under 64 limit
+    internal.processData(chunk);
+
+    // Second chunk: 80 bytes total, exceeds 64-byte buffer limit
+    expect(() => internal.processData(chunk)).toThrow(TransportError);
+    expect(transport.isClosed()).toBe(true);
   });
 });

@@ -25,6 +25,10 @@ import {
 // ALPN protocol for Geode
 const GEODE_ALPN = ['geode/1'];
 
+// Maximum allowed sizes to prevent unbounded memory growth (CWE-400)
+const DEFAULT_MAX_MESSAGE_SIZE = 16 * 1024 * 1024; // 16 MiB per protobuf message
+const DEFAULT_MAX_BUFFER_BYTES = 64 * 1024 * 1024; // 64 MiB buffered
+
 /**
  * Transport interface for communication with Geode server.
  */
@@ -145,13 +149,21 @@ export class QuicTransport extends BaseTransport {
   private _client: unknown = null;
   private _stream: unknown = null;
   private _protoBuffer: Buffer = Buffer.alloc(0);
+  private _maxMessageSize: number;
+  private _maxBufferBytes: number;
   private _pendingProtoReads: Array<{
     resolve: (value: QuicServerMessage) => void;
     reject: (error: Error) => void;
   }> = [];
 
-  constructor(address: string) {
+  constructor(
+    address: string,
+    maxMessageSize: number = DEFAULT_MAX_MESSAGE_SIZE,
+    maxBufferBytes: number = DEFAULT_MAX_BUFFER_BYTES
+  ) {
     super(address);
+    this._maxMessageSize = maxMessageSize;
+    this._maxBufferBytes = maxBufferBytes;
   }
 
   /**
@@ -326,9 +338,20 @@ export class QuicTransport extends BaseTransport {
   private processData(data: Buffer): void {
     this._protoBuffer = Buffer.concat([this._protoBuffer, data]);
 
+    // Reject if accumulated buffer exceeds maximum allowed size (CWE-400)
+    if (this._protoBuffer.length > this._maxBufferBytes) {
+      this.handleOversize('buffer');
+    }
+
     // Try to decode complete messages
     while (this._protoBuffer.length >= 4) {
       const msgLen = decodeLengthPrefix(this._protoBuffer);
+
+      // Reject oversized messages before buffering (CWE-400)
+      if (msgLen > this._maxMessageSize) {
+        this.handleOversize('message');
+      }
+
       const totalLen = 4 + msgLen;
 
       if (this._protoBuffer.length < totalLen) {
@@ -362,6 +385,20 @@ export class QuicTransport extends BaseTransport {
         }
       }
     }
+  }
+
+  /**
+   * Handle oversized data by closing the transport.
+   */
+  private handleOversize(kind: 'message' | 'buffer'): never {
+    const error = new TransportError({
+      operation: 'receive',
+      cause: new Error(`Received ${kind} exceeds maximum allowed size`),
+    });
+    this._protoBuffer = Buffer.alloc(0);
+    this.rejectPendingReads(error);
+    void this.close();
+    throw error;
   }
 
   /**
@@ -444,11 +481,12 @@ export class QuicTransport extends BaseTransport {
     if (this._closed) return;
     this._closed = true;
 
-    // Reject pending reads
+    // Reject pending reads and clear buffers
     for (const pending of this._pendingProtoReads) {
       pending.reject(ErrClosed);
     }
     this._pendingProtoReads = [];
+    this._protoBuffer = Buffer.alloc(0);
 
     // Close QUIC client
     if (this._client) {

@@ -255,25 +255,26 @@ export class ConnectionPool {
         );
       }, this._acquireTimeout);
 
+      let onAbort: (() => void) | null = null;
       const cleanup = () => {
         clearTimeout(timeout);
+        if (signal && onAbort) {
+          signal.removeEventListener('abort', onAbort);
+        }
       };
 
       if (signal) {
-        signal.addEventListener(
-          'abort',
-          () => {
-            cleanup();
-            const idx = this._waitQueue.findIndex(
-              (w) => w.resolve === resolve && w.reject === reject
-            );
-            if (idx !== -1) {
-              this._waitQueue.splice(idx, 1);
-            }
-            reject(new TransportError({ operation: 'acquire', cause: new Error('Aborted') }));
-          },
-          { once: true }
-        );
+        onAbort = () => {
+          cleanup();
+          const idx = this._waitQueue.findIndex(
+            (w) => w.resolve === resolve && w.reject === reject
+          );
+          if (idx !== -1) {
+            this._waitQueue.splice(idx, 1);
+          }
+          reject(new TransportError({ operation: 'acquire', cause: new Error('Aborted') }));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
       }
 
       this._waitQueue.push({

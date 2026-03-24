@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Connection } from '../../src/connection.js';
 import { MockTransport } from '../../src/transport.js';
+import { SecurityError, TransportError } from '../../src/errors.js';
+import { MAX_PAGE_SIZE } from '../../src/config.js';
 import type { QuicServerMessage } from '../../src/proto.js';
 
 describe('Connection', () => {
@@ -381,6 +383,100 @@ describe('Connection', () => {
     it('should be idempotent', async () => {
       await connection.close();
       await connection.close(); // Should not throw
+    });
+  });
+
+  describe('pageSize validation', () => {
+    it('should reject negative pageSize override', async () => {
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'num', type: 'INT64' }],
+          },
+        },
+      });
+
+      await expect(connection.query('RETURN 1 AS num', { pageSize: -1 })).rejects.toThrow(
+        SecurityError
+      );
+    });
+
+    it('should reject pageSize above MAX_PAGE_SIZE', async () => {
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'num', type: 'INT64' }],
+          },
+        },
+      });
+
+      await expect(
+        connection.query('RETURN 1 AS num', { pageSize: MAX_PAGE_SIZE + 1 })
+      ).rejects.toThrow(SecurityError);
+    });
+  });
+
+  describe('request timeout', () => {
+    it('should abort when requestTimeout is exceeded', async () => {
+      const timeoutTransport = new MockTransport();
+      timeoutTransport.queueProtoResponse({
+        hello: {
+          success: true,
+          sessionId: 'timeout-session',
+          errorMessage: '',
+          capabilities: [],
+        },
+      });
+
+      const timeoutConnection = await Connection.connectWithTransport(
+        {
+          host: 'localhost',
+          port: 3141,
+          pageSize: 100,
+          transport: 'quic',
+          helloName: 'test',
+          helloVersion: '1.0.0',
+          conformance: 'min',
+          requestTimeout: 10,
+        },
+        timeoutTransport
+      );
+
+      // Don't queue any response - the timeout should fire
+      await expect(timeoutConnection.exec('RETURN 1')).rejects.toThrow(TransportError);
+    });
+
+    it('should honor already-aborted signals with requestTimeout', async () => {
+      const timeoutTransport = new MockTransport();
+      timeoutTransport.queueProtoResponse({
+        hello: {
+          success: true,
+          sessionId: 'timeout-session-2',
+          errorMessage: '',
+          capabilities: [],
+        },
+      });
+
+      const timeoutConnection = await Connection.connectWithTransport(
+        {
+          host: 'localhost',
+          port: 3141,
+          pageSize: 100,
+          transport: 'quic',
+          helloName: 'test',
+          helloVersion: '1.0.0',
+          conformance: 'min',
+          requestTimeout: 1000,
+        },
+        timeoutTransport
+      );
+
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        timeoutConnection.exec('RETURN 1', { signal: controller.signal })
+      ).rejects.toThrow(TransportError);
     });
   });
 });

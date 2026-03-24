@@ -1,28 +1,42 @@
 # Security Gap Analysis - Geode Node.js Client
 
-**Last Updated**: 2026-01-30
-**Review Scope**: Full codebase security review (Phase 4 - Adversarial Review)
+**Last Updated**: 2026-03-24
+**Review Scope**: Full codebase security review (Phase 5 - Post-Protobuf Migration)
 **Reviewer**: Claude Code (Security Review Agent)
-**Git Commit**: 9b33fb9 (main)
+**Git Commit**: e8197bf (main)
 
 ## Summary
 
-| Severity | Phase 1 (Closed) | Phase 2 (Closed) | Phase 3 (Closed) | Phase 4 (Closed) | Total Open |
-|----------|------------------|------------------|------------------|------------------|------------|
-| Critical | 0                | 1                | 0                | 0                | 0          |
-| High     | 3                | 1                | 2                | 1                | 0          |
-| Medium   | 3                | 2                | 0                | 0                | 0          |
-| Low      | 4                | 2                | 4                | 3                | 0          |
-| **Total**| **10**           | **6**            | **6**            | **4**            | **0**      |
+| Severity | Phase 1 (Closed) | Phase 2 (Closed) | Phase 3 (Closed) | Phase 4 (Closed) | Phase 5 (Closed) | Total Open |
+|----------|------------------|------------------|------------------|------------------|------------------|------------|
+| Critical | 0                | 1                | 0                | 0                | 0                | 0          |
+| High     | 3                | 1                | 2                | 1                | 0                | 0          |
+| Medium   | 3                | 2                | 0                | 0                | 1                | 0          |
+| Low      | 4                | 2                | 4                | 3                | 3                | 0          |
+| Info     | 0                | 0                | 0                | 0                | 1                | 0          |
+| **Total**| **10**           | **6**            | **6**            | **4**            | **5**            | **0**      |
 
 ### Top 5 Risks (Current)
 
-All Phase 4 security gaps have been addressed:
+All Phase 5 security gaps have been addressed:
 
-1. **HIGH: valueToGQL Incomplete String Escaping - GQL Injection** - **CLOSED** - Added backslash escaping before quote escaping to prevent escape sequence injection
-2. **LOW: ConfigError May Leak Sensitive Config Values** - **CLOSED** - Added sensitive field detection to redact password/key/token/secret from error messages
-3. **LOW: Port Number Validation Lacks Valid Range Check** - **CLOSED** - Added isValidPort() function to validate ports are within 1-65535 range
-4. **LOW: QueryBuilder.where() Missing Security Warnings** - **CLOSED** - Added comprehensive security documentation similar to raw() method
+1. **MEDIUM: Unbounded QUIC protobuf buffer allows memory exhaustion** - **CLOSED** - Added max message size (16 MiB) and max buffer (64 MiB) limits with hard close on oversize
+2. **LOW: requestTimeout config not enforced on send/receive** - **CLOSED** - Added `_sendWithTimeout`/`_receiveWithTimeout` wrappers to all transport calls
+3. **LOW: Per-query pageSize override bypasses validation** - **CLOSED** - Added early `validatePageSize()` call before executing queries
+4. **LOW: ConnectionPool.acquire leaks AbortSignal listeners** - **CLOSED** - Added listener cleanup via named `onAbort` handler removed on resolve/reject
+5. **INFO: CI pipeline lacks SBOM enforcement and provenance** - **CLOSED** - SBOM scan set to `allow_failure: false`, npm provenance enabled
+
+---
+
+## Phase 5: Post-Protobuf Migration Review Findings (ALL CLOSED)
+
+| Rank | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence | Fix Summary | Status |
+|------|----------|------------|---------|-----------|-----------|----------|-------------|--------|
+| 1 | **Medium** | 36 | Unbounded QUIC protobuf buffer allows memory exhaustion | src/transport.ts | CWE-400 | processData() concatenates without limit | Added `_maxMessageSize`/`_maxBufferBytes` with `handleOversize()` that closes transport | **Closed** |
+| 2 | **Low** | 24 | requestTimeout config not enforced on send/receive | src/connection.ts | CWE-400, CWE-703 | All `sendProto`/`receiveProto` calls lacked timeout | Added `_sendWithTimeout`/`_receiveWithTimeout` wrappers; handles pre-aborted signals | **Closed** |
+| 3 | **Low** | 24 | Per-query pageSize override bypasses validation | src/connection.ts | CWE-20 | `options?.pageSize` used without validation | Added early `validatePageSize()` before sending execute request | **Closed** |
+| 4 | **Low** | 24 | ConnectionPool.acquire leaks AbortSignal listeners | src/pool.ts | CWE-401 | Anonymous abort handler never removed on success | Named `onAbort` handler cleaned up in `cleanup()` | **Closed** |
+| 5 | **Info** | 16 | CI pipeline lacks SBOM enforcement and provenance | .gitlab-ci.yml | CWE-345, OWASP A08:2021 | `sbom-scan allow_failure: true`, `provenance: false` | SBOM scan required; provenance enabled for npm publish | **Closed** |
 
 ---
 
@@ -424,7 +438,7 @@ if (!isValidPort(port)) {
 
 ### Weaknesses (Remaining)
 
-None - All identified Phase 1, Phase 2, Phase 3, and Phase 4 security gaps have been addressed.
+None - All identified Phase 1, Phase 2, Phase 3, Phase 4, and Phase 5 security gaps have been addressed.
 
 ### Recommendations
 

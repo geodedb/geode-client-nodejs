@@ -28,12 +28,18 @@ import {
   buildSavepointRequest,
   buildRollbackToRequest,
   rowToRecord,
+  type QuicClientMessage,
   type QuicServerMessage,
   type ExecutionResponse,
   type ColumnDefinition,
   type DataPage,
 } from './proto.js';
-import { validateQuery, validateParamValue, validateSavepointName } from './validate.js';
+import {
+  validateQuery,
+  validateParamValue,
+  validateSavepointName,
+  validatePageSize,
+} from './validate.js';
 import { Transaction } from './transaction.js';
 import { QueryResult } from './result.js';
 import type { PreparedStatement } from './prepared.js';
@@ -209,8 +215,8 @@ export class Connection {
       this._config.conformance
     );
 
-    await this._transport.sendProto(msg);
-    const response = await this._transport.receiveProto();
+    await this._sendWithTimeout(msg);
+    const response = await this._receiveWithTimeout();
 
     if (response.hello) {
       if (!response.hello.success) {
@@ -254,15 +260,20 @@ export class Connection {
 
     const signal = options?.signal;
 
+    // Validate pageSize early before sending anything (CWE-20)
+    if (options?.pageSize !== undefined) {
+      validatePageSize(options.pageSize);
+    }
+
     try {
       this._state = 'fetching';
 
       // Send Execute request
       const msg = buildExecuteRequest(this._sessionId, query, params);
-      await this._transport.sendProto(msg, signal);
+      await this._sendWithTimeout(msg, signal);
 
       // Read response - should be schema or error
-      const response = await this._transport.receiveProto(signal);
+      const response = await this._receiveWithTimeout(signal);
 
       if (!response.execute) {
         this._state = this._inTransaction ? 'in_transaction' : 'idle';
@@ -317,11 +328,12 @@ export class Connection {
         // No inline data received - send PULL request to get first page
         this._requestId++;
         const pageSize = options?.pageSize ?? this._config.pageSize;
+        validatePageSize(pageSize);
         const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
-        await this._transport.sendProto(pullMsg, signal);
+        await this._sendWithTimeout(pullMsg, signal);
 
         // Read pull response - server wraps data in pull.response, not execute
-        const pullResponse = await this._transport.receiveProto(signal);
+        const pullResponse = await this._receiveWithTimeout(signal);
         const pullExec = pullResponse.pull?.response ?? pullResponse.execute;
 
         if (pullExec) {
@@ -340,6 +352,9 @@ export class Connection {
       }
 
       // Create result
+      const resultPageSize = options?.pageSize ?? this._config.pageSize;
+      validatePageSize(resultPageSize);
+
       const result = new QueryResult(
         this,
         columns,
@@ -347,7 +362,7 @@ export class Connection {
         isFinal,
         isOrdered,
         orderKeys,
-        options?.pageSize ?? this._config.pageSize,
+        resultPageSize,
         signal
       );
 
@@ -402,10 +417,10 @@ export class Connection {
 
       // Send Execute request
       const msg = buildExecuteRequest(this._sessionId, query, params);
-      await this._transport.sendProto(msg, signal);
+      await this._sendWithTimeout(msg, signal);
 
       // Read response
-      const response = await this._transport.receiveProto(signal);
+      const response = await this._receiveWithTimeout(signal);
 
       if (!response.execute) {
         throw new TransportError({
@@ -446,11 +461,12 @@ export class Connection {
     rows: Record<string, unknown>[];
     final: boolean;
   }> {
+    validatePageSize(pageSize);
     this._requestId++;
     const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
-    await this._transport.sendProto(pullMsg, signal);
+    await this._sendWithTimeout(pullMsg, signal);
 
-    const response = await this._transport.receiveProto(signal);
+    const response = await this._receiveWithTimeout(signal);
 
     // Server sends pull data in pull.response, not execute
     const execResp = response.pull?.response ?? response.execute;
@@ -520,9 +536,9 @@ export class Connection {
     }
 
     const msg = buildBeginRequest(false, this._sessionId);
-    await this._transport.sendProto(msg, signal);
+    await this._sendWithTimeout(msg, signal);
 
-    const response = await this._transport.receiveProto(signal);
+    const response = await this._receiveWithTimeout(signal);
 
     if (response.begin) {
       if (response.begin.sessionId) {
@@ -546,9 +562,9 @@ export class Connection {
    */
   async _commit(signal?: AbortSignal): Promise<void> {
     const msg = buildCommitRequest(this._sessionId);
-    await this._transport.sendProto(msg, signal);
+    await this._sendWithTimeout(msg, signal);
 
-    const response = await this._transport.receiveProto(signal);
+    const response = await this._receiveWithTimeout(signal);
 
     if (!response.commit) {
       throw new TransportError({
@@ -575,9 +591,9 @@ export class Connection {
    */
   async _rollback(signal?: AbortSignal): Promise<void> {
     const msg = buildRollbackRequest(this._sessionId);
-    await this._transport.sendProto(msg, signal);
+    await this._sendWithTimeout(msg, signal);
 
-    const response = await this._transport.receiveProto(signal);
+    const response = await this._receiveWithTimeout(signal);
 
     if (!response.rollback) {
       throw new TransportError({
@@ -597,9 +613,9 @@ export class Connection {
     validateSavepointName(name);
 
     const msg = buildSavepointRequest(name, this._sessionId);
-    await this._transport.sendProto(msg, signal);
+    await this._sendWithTimeout(msg, signal);
 
-    const response = await this._transport.receiveProto(signal);
+    const response = await this._receiveWithTimeout(signal);
 
     if (!response.savepoint) {
       throw new TransportError({
@@ -625,9 +641,9 @@ export class Connection {
     validateSavepointName(name);
 
     const msg = buildRollbackToRequest(name, this._sessionId);
-    await this._transport.sendProto(msg, signal);
+    await this._sendWithTimeout(msg, signal);
 
-    const response = await this._transport.receiveProto(signal);
+    const response = await this._receiveWithTimeout(signal);
 
     if (!response.rollbackTo) {
       throw new TransportError({
@@ -655,9 +671,9 @@ export class Connection {
     }
 
     const msg = buildPingRequest();
-    await this._transport.sendProto(msg, signal);
+    await this._sendWithTimeout(msg, signal);
 
-    const response = await this._transport.receiveProto(signal);
+    const response = await this._receiveWithTimeout(signal);
 
     if (!response.ping) {
       throw new TransportError({
@@ -757,5 +773,70 @@ export class Connection {
     if (operation === 'begin' && this._inTransaction) {
       throw ErrTxInProgress;
     }
+  }
+
+  /**
+   * Send a protobuf message with request timeout enforcement.
+   */
+  private async _sendWithTimeout(msg: QuicClientMessage, signal?: AbortSignal): Promise<void> {
+    const { signal: timeoutSignal, cleanup } = this._withRequestTimeout(signal);
+    try {
+      await this._transport.sendProto(msg, timeoutSignal);
+    } finally {
+      cleanup();
+    }
+  }
+
+  /**
+   * Receive a protobuf message with request timeout enforcement.
+   */
+  private async _receiveWithTimeout(signal?: AbortSignal): Promise<QuicServerMessage> {
+    const { signal: timeoutSignal, cleanup } = this._withRequestTimeout(signal);
+    try {
+      return await this._transport.receiveProto(timeoutSignal);
+    } finally {
+      cleanup();
+    }
+  }
+
+  /**
+   * Create a combined abort signal from requestTimeout config and optional caller signal.
+   * Handles already-aborted signals (CWE-703).
+   */
+  private _withRequestTimeout(signal?: AbortSignal): { signal?: AbortSignal; cleanup: () => void } {
+    const timeoutMs = this._config.requestTimeout ?? 0;
+    if (!timeoutMs || timeoutMs <= 0) {
+      return { signal, cleanup: () => {} };
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    // Honor already-aborted signals immediately
+    if (signal?.aborted) {
+      controller.abort();
+      return {
+        signal: controller.signal,
+        cleanup: () => {
+          clearTimeout(timeoutId);
+        },
+      };
+    }
+
+    let onAbort: (() => void) | null = null;
+    if (signal) {
+      onAbort = () => controller.abort();
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    return {
+      signal: controller.signal,
+      cleanup: () => {
+        clearTimeout(timeoutId);
+        if (signal && onAbort) {
+          signal.removeEventListener('abort', onAbort);
+        }
+      },
+    };
   }
 }
