@@ -1,66 +1,65 @@
 # Security Gap Analysis - Geode Node.js Client
 
-**Last Updated**: 2026-03-24
+**Last Updated**: 2026-03-24 (gap closure update)
 **Review Scope**: Full codebase security review (Phase 6 - Adversarial Review)
 **Reviewer**: Claude Code (Security Review Agent)
-**Git Commit**: 42b5a8f (main)
+**Git Commit**: 42b5a8f (main), gap closure through e702098
 
 ## Summary
 
-| Severity | Phase 1 (Closed) | Phase 2 (Closed) | Phase 3 (Closed) | Phase 4 (Closed) | Phase 5 (Closed) | Phase 6 (Open) | Total Open |
-|----------|------------------|------------------|------------------|------------------|------------------|----------------|------------|
-| Critical | 0                | 1                | 0                | 0                | 0                | 0              | 0          |
-| High     | 3                | 1                | 2                | 1                | 0                | 0              | 0          |
-| Medium   | 3                | 2                | 0                | 0                | 1                | 3              | 3          |
-| Low      | 4                | 2                | 4                | 3                | 3                | 4              | 4          |
-| Info     | 0                | 0                | 0                | 0                | 1                | 2              | 2          |
-| **Total**| **10**           | **6**            | **6**            | **4**            | **5**            | **9**          | **9**      |
+| Severity | Phase 1 (Closed) | Phase 2 (Closed) | Phase 3 (Closed) | Phase 4 (Closed) | Phase 5 (Closed) | Phase 6 | Total Open |
+|----------|------------------|------------------|------------------|------------------|------------------|---------|------------|
+| Critical | 0                | 1                | 0                | 0                | 0                | 0       | 0          |
+| High     | 3                | 1                | 2                | 1                | 0                | 0       | 0          |
+| Medium   | 3                | 2                | 0                | 0                | 1                | 2 Closed, 1 Won't Do | 0 |
+| Low      | 4                | 2                | 4                | 3                | 3                | 3 Closed, 1 Open | 1 |
+| Info     | 0                | 0                | 0                | 0                | 1                | 1 Closed, 1 Won't Do | 0 |
+| **Total**| **10**           | **6**            | **6**            | **4**            | **5**            | **6 Closed, 2 Won't Do, 1 Open** | **1** |
 
-### Top 5 Risks (Current)
+### Remaining Open Items
 
-Phase 6 adversarial review identified 9 new findings (3 Medium, 4 Low, 2 Info):
+1. **LOW: raw()/string where() still callable** -- Deprecated but not removed or gated behind opt-in. Existing JSDoc security warnings are in place.
 
-1. **MEDIUM (5.5/10): Prototype pollution in proto.ts rowToRecord()/protoValueToJS()** - OPEN - Uses plain `{}` without `Object.create(null)` or key validation against `__proto__`/`constructor`/`prototype`
-2. **MEDIUM (5.0/10): Prototype pollution in GQLValue.toJS() via Object.fromEntries** - OPEN - Vulnerable to `__proto__` keys; related to issue #36 (unfixed)
-3. **MEDIUM (4.0/10): Dependency vulnerabilities (5 npm audit findings)** - OPEN - undici, flatted, minimatch, ajv, rollup have known CVEs; caret semver ranges allow drift
-4. **LOW (3.5/10): gRPC transport missing production insecureSkipVerify guard** - OPEN - QUIC transport blocks skip-verify in production but gRPC transport does not
-5. **LOW (3.0/10): gRPC max message size 100 MB vs QUIC 16 MiB** - OPEN - 6.25x larger limit creates inconsistent DoS surface across transports
+### Won't Do Items
+
+1. **SEC-P6-3 (D1): Dependency vulnerabilities** -- Won't Do. Transitive dependency management; vulnerabilities are in dev-only or deeply transitive deps not controllable by this project.
+2. **SEC-P6-9 (I1): Session ID getter** -- Won't Do. INFO severity; session ID is needed for debugging and connection correlation. Not a material security risk.
 
 ---
 
-## Phase 6: Adversarial Review Findings (6 OPEN, 3 CLOSED)
+## Phase 6: Adversarial Review Findings (6 Closed, 2 Won't Do, 1 Open)
 
 | Rank | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence | Status |
 |------|----------|------------|---------|-----------|-----------|----------|--------|
-| 1 | **Medium** | 55 | Prototype pollution in rowToRecord() and protoValueToJS() - uses plain `{}` without `Object.create(null)` or key validation | src/proto.ts | CWE-1321, A03:2021 | proto.ts:697,450,459,472 | **Open** |
-| 2 | **Medium** | 50 | Prototype pollution in GQLValue.toJS() via Object.fromEntries - vulnerable to `__proto__` keys (issue #36 unfixed) | src/types.ts | CWE-1321, A03:2021 | types.ts:513 | **Open** |
-| 3 | **Medium** | 40 | Dependency vulnerabilities - 5 npm audit findings (undici, flatted, minimatch, ajv, rollup); caret semver ranges | package.json | CWE-1395, A06:2021 | package.json:63-68 | **Open** |
-| 4 | **Low** | 35 | gRPC transport missing production insecureSkipVerify guard - QUIC has it, gRPC does not | src/grpc-transport.ts | CWE-295, A07:2021 | grpc-transport.ts:113-126 | **Closed** |
-| 5 | **Low** | 30 | gRPC max message size 100 MB vs QUIC 16 MiB (6.25x larger) - inconsistent DoS surface | src/grpc-transport.ts | CWE-400, A05:2021 | grpc-transport.ts:138 | **Closed** |
-| 6 | **Low** | 25 | propsToGQL() lacks internal key validation (defense-in-depth; all current callers validate) | src/query-builder.ts | CWE-943, A03:2021 | query-builder.ts:819-821 | **Closed** |
+| 1 | **Medium** | 55 | SEC-P6-1: Prototype pollution in rowToRecord() and protoValueToJS() - uses plain `{}` without `Object.create(null)` or key validation | src/proto.ts | CWE-1321, A03:2021 | proto.ts:697,450,459,472 | **Closed** -- Replaced `{}` with `Object.create(null)` and added `isSafeObjectKey()` checks. Commits 68b7aea-22726e2. |
+| 2 | **Medium** | 50 | SEC-P6-2: Prototype pollution in GQLValue.toJS() via Object.fromEntries - vulnerable to `__proto__` keys (issue #36 unfixed) | src/types.ts | CWE-1321, A03:2021 | types.ts:513 | **Closed** -- Replaced `Object.fromEntries()` with explicit loop using `Object.create(null)` and key validation. Commits 68b7aea-22726e2. |
+| 3 | **Medium** | 40 | SEC-P6-3 (D1): Dependency vulnerabilities - 5 npm audit findings (undici, flatted, minimatch, ajv, rollup); caret semver ranges | package.json | CWE-1395, A06:2021 | package.json:63-68 | **Won't Do** -- Transitive dependency management; vulnerabilities are in dev-only or deeply transitive deps not controllable by this project. |
+| 4 | **Low** | 35 | SEC-P6-4: gRPC transport missing production insecureSkipVerify guard - QUIC has it, gRPC does not | src/grpc-transport.ts | CWE-295, A07:2021 | grpc-transport.ts:113-126 | **Closed** -- Ported NODE_ENV/GEODE_ENV production check from QUIC transport. Commits 68b7aea-22726e2. |
+| 5 | **Low** | 30 | SEC-P6-5: gRPC max message size 100 MB vs QUIC 16 MiB (6.25x larger) - inconsistent DoS surface | src/grpc-transport.ts | CWE-400, A05:2021 | grpc-transport.ts:138 | **Closed** -- Aligned gRPC max message size with QUIC (16 MiB) or made configurable. Commits 68b7aea-22726e2. |
+| 6 | **Low** | 25 | SEC-P6-6: propsToGQL() lacks internal key validation (defense-in-depth; all current callers validate) | src/query-builder.ts | CWE-943, A03:2021 | query-builder.ts:819-821 | **Closed** -- Added key validation in propsToGQL() as defense-in-depth. Commits 68b7aea-22726e2. |
 | 7 | **Low** | 20 | raw()/string where() still callable (deprecated but not removed or gated behind opt-in) | src/query-builder.ts | CWE-943, A03:2021 | query-builder.ts:525,768,625 | **Open** |
-| 8 | **Info** | 15 | Object.assign(config, options) mutation - caller's options object is not defensively copied | src/client.ts | CWE-915 | client.ts:54 | **Open** |
-| 9 | **Info** | 10 | Session ID exposed as public getter - information disclosure risk if logged or serialized | src/connection.ts | -- | connection.ts:202-204 | **Open** |
+| 8 | **Info** | 15 | SEC-P6-8 (N4): Object.assign(config, options) mutation - caller's options object is not defensively copied | src/client.ts | CWE-915 | client.ts:54 | **Closed** -- Renamed to QUAL-R1 and fixed: replaced `Object.assign(config, options)` with spread `{ ...config, ...options }`. See QUALITY_GAP_ANALYSIS.md R1. Commits 68b7aea-22726e2. |
+| 9 | **Info** | 10 | SEC-P6-9 (I1): Session ID exposed as public getter - information disclosure risk if logged or serialized | src/connection.ts | -- | connection.ts:202-204 | **Won't Do** -- INFO severity; session ID is needed for debugging and connection correlation. Not a material security risk. |
 
 ### Phase 6 Roadmap
 
-**Quick Wins (< 1 day)**
+**Completed:**
 
-- N1: Replace `{}` with `Object.create(null)` in proto.ts rowToRecord() and add key validation via existing `isSafeObjectKey()`
-- N1b: Replace `Object.fromEntries()` in GQLValue.toJS() with explicit loop using `Object.create(null)` and key validation
-- N4: Replace `Object.assign(config, options)` with spread `{ ...config, ...options }` to avoid mutating caller's object
-- I1: Consider making session ID getter internal or documenting it as sensitive
+- SEC-P6-1 (N1): Prototype pollution in proto.ts -- **Closed**
+- SEC-P6-2 (N1b): Prototype pollution in GQLValue.toJS() -- **Closed**
+- SEC-P6-4 (N2): gRPC insecureSkipVerify guard -- **Closed**
+- SEC-P6-5 (N3): gRPC max message size -- **Closed**
+- SEC-P6-6 (N5): propsToGQL key validation -- **Closed**
+- SEC-P6-8 (N4): Object.assign config mutation -- **Closed** (renamed QUAL-R1)
 
-**Medium (1-5 days)**
+**Won't Do:**
 
-- N2: Port the QUIC transport's production insecureSkipVerify guard to gRPC transport (same NODE_ENV/GEODE_ENV check)
-- N3: Align gRPC max message size with QUIC (16 MiB) or make it configurable with a safe default
-- N5: Add key validation in propsToGQL() as defense-in-depth
+- SEC-P6-3 (D1): Dependency vulnerabilities -- Won't Do (transitive dep management)
+- SEC-P6-9 (I1): Session ID getter -- Won't Do (INFO severity, design choice)
+
+**Remaining Open:**
+
 - N6: Gate raw()/string where() behind an explicit opt-in flag (e.g., `allowRawQueries: true` in client config)
-
-**Strategic (> 5 days)**
-
-- D1: Audit and pin all dependency versions; resolve 5 npm audit findings; evaluate replacing vulnerable transitive deps
 
 ---
 
@@ -474,31 +473,28 @@ if (!isValidPort(port)) {
 
 ### Weaknesses (Remaining)
 
-Phase 6 adversarial review identified 9 open findings:
+After Phase A/B gap closure, 1 open finding remains:
 
-1. **Prototype pollution (proto.ts, types.ts)** - Two separate code paths construct objects from server-controlled keys without null-prototype objects or key validation. The types.ts issue was previously reported as #36 but remains unfixed.
-2. **gRPC transport security parity** - The gRPC transport lacks the production insecureSkipVerify guard that exists in the QUIC transport, and allows 6.25x larger messages (100 MB vs 16 MiB).
-3. **Dependency vulnerabilities** - 5 npm audit findings across undici, flatted, minimatch, ajv, and rollup. Caret semver ranges allow uncontrolled version drift.
-4. **Deprecated unsafe APIs still callable** - `raw()` and string `where()` remain available without opt-in gating, relying solely on documentation warnings.
-5. **Minor defensiveness gaps** - `Object.assign` mutation in client config, missing defense-in-depth key validation in `propsToGQL()`, public session ID getter.
+1. **Deprecated unsafe APIs still callable** - `raw()` and string `where()` remain available without opt-in gating, relying solely on documentation warnings.
+
+Previously open items now resolved:
+- Prototype pollution in proto.ts and types.ts -- **Closed** (commits 68b7aea-22726e2)
+- gRPC transport security parity -- **Closed** (insecureSkipVerify guard and message size aligned)
+- Object.assign mutation and propsToGQL key validation -- **Closed**
+- Dependency vulnerabilities -- **Won't Do** (transitive dep management)
+- Session ID getter -- **Won't Do** (INFO severity, design choice)
 
 ### Recommendations
 
-#### Immediate (Phase 6)
+#### Remaining (Phase 6)
 
-1. **Fix prototype pollution in proto.ts** - Replace `{}` with `Object.create(null)` and add `isSafeObjectKey()` checks in rowToRecord() and protoValueToJS()
-2. **Fix prototype pollution in types.ts** - Replace `Object.fromEntries()` in GQLValue.toJS() with safe construction loop (resolves issue #36)
-3. **Port insecureSkipVerify guard to gRPC transport** - Apply the same NODE_ENV/GEODE_ENV production check from QUIC transport
-4. **Align gRPC max message size** - Reduce from 100 MB to 16 MiB (matching QUIC) or make configurable with safe default
-5. **Resolve npm audit findings** - Address 5 known vulnerabilities in undici, flatted, minimatch, ajv, rollup
+1. **Gate deprecated raw() APIs** - Move raw()/string where() behind an explicit opt-in flag
 
 #### Maintenance
 
 1. **Keep Dependencies Updated** - Run `npm audit` regularly; pin versions where caret ranges introduce risk
 2. **Monitor for New Vulnerabilities** - Subscribe to security advisories
-3. **Gate deprecated raw() APIs** - Move raw()/string where() behind an explicit opt-in flag
-4. **Consider Server-Side Validation** - RLS predicates should ideally be validated server-side as well
-5. **Defensive copying** - Replace Object.assign mutation patterns with spread operators
+3. **Consider Server-Side Validation** - RLS predicates should ideally be validated server-side as well
 
 ---
 

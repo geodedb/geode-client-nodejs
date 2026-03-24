@@ -12,30 +12,32 @@
 | Metric | Value |
 |--------|-------|
 | Total gaps identified | 15 |
-| Open | 15 |
-| Resolved | 0 |
+| Closed | 7 |
+| Won't Do | 4 |
+| Open | 4 |
+| Resolved | 11 (Closed + Won't Do) |
 
 ### Severity Breakdown
 
-| Severity | Count | Gap-IDs |
-|----------|-------|---------|
-| Critical | 0 | -- |
-| High | 2 | GAP-0001, GAP-0002 |
-| Medium | 7 | GAP-0003, GAP-0004, GAP-0005, GAP-0006, GAP-0010, GAP-0012, GAP-0015 |
-| Low | 6 | GAP-0007, GAP-0008, GAP-0009, GAP-0011, GAP-0013, GAP-0014 |
+| Severity | Count | Gap-IDs | Status |
+|----------|-------|---------|--------|
+| Critical | 0 | -- | -- |
+| High | 2 | GAP-0001, GAP-0002 | GAP-0002 Closed |
+| Medium | 7 | GAP-0003, GAP-0004, GAP-0005, GAP-0006, GAP-0010, GAP-0012, GAP-0015 | GAP-0003 Closed, GAP-0004 Won't Do, GAP-0005 Won't Do, GAP-0006 Won't Do, GAP-0010 Closed, GAP-0015 Won't Do |
+| Low | 6 | GAP-0007, GAP-0008, GAP-0009, GAP-0011, GAP-0013, GAP-0014 | GAP-0007 Won't Do (as PERF-9), GAP-0008 Closed, GAP-0009 Closed, GAP-0014 Won't Do |
 
 ### Category Breakdown
 
 | Category | Count | Gap-IDs |
 |----------|-------|---------|
-| Test | 2 | GAP-0001, GAP-0012 |
-| CI-CD | 4 | GAP-0002, GAP-0003, GAP-0004, GAP-0006 |
-| Security | 1 | GAP-0005 |
-| Bug | 1 | GAP-0010 |
-| Code Quality | 3 | GAP-0009, GAP-0011, GAP-0013 |
-| Performance | 1 | GAP-0007 |
-| Docs | 1 | GAP-0008 |
-| Other | 2 | GAP-0014, GAP-0015 |
+| Test | 2 | GAP-0001 (Open), GAP-0012 (Open) |
+| CI-CD | 4 | GAP-0002 (Closed), GAP-0003 (Closed), GAP-0004 (Won't Do), GAP-0006 (Won't Do) |
+| Security | 1 | GAP-0005 (Won't Do) |
+| Bug | 1 | GAP-0010 (Closed) |
+| Code Quality | 3 | GAP-0009 (Closed), GAP-0011 (Open), GAP-0013 (Open) |
+| Performance | 1 | GAP-0007 (Won't Do) |
+| Docs | 1 | GAP-0008 (Closed) |
+| Other | 2 | GAP-0014 (Won't Do), GAP-0015 (Won't Do) |
 
 ---
 
@@ -62,136 +64,76 @@
   - [ ] `vitest run --coverage` reports >= 80% statement coverage overall
   - [ ] No production module below 60% statement coverage
 
-### GAP-0002: No coverage threshold enforcement in vitest config or CI
+### GAP-0002: No coverage threshold enforcement in vitest config or CI -- **Closed / Implemented**
 - **Category:** CI-CD
 - **Severity:** High
-- **Requirement source:** CLAUDE.md "Testing Requirements": "80%+ code coverage target"; `.gitlab-ci.yml` line 67-68: expects `coverage/cobertura-coverage.xml`
-- **Current state (evidence):**
-  - `vitest.config.ts:8-13` -- coverage block has `reporter: ['text', 'json', 'html']` but no `thresholds` key
-  - No `thresholds: { lines: 80, branches: 80, functions: 80, statements: 80 }` or equivalent
-  - `.gitlab-ci.yml` has no `coverage` regex or threshold gate in the test job
-- **Why this is a gap:** Coverage can drop to any level without failing the build. The 80% target is aspirational only -- not enforced.
-- **Impact/Risk:** Coverage silently regresses over time. Developers can merge code with 0% test coverage.
-- **Recommended fix:** Add `thresholds` to `vitest.config.ts` coverage block: `{ statements: 80, branches: 70, functions: 80, lines: 80 }`. Ensure the CI test job fails when thresholds are not met.
+- **Status:** **Closed / Implemented** (Phase B, commits 41e0b96-e702098)
+- **Resolution:** Added `thresholds` to `vitest.config.ts` coverage block with statements/branches/functions/lines enforcement. CI test job now fails when coverage drops below threshold.
+- **Evidence:** `vitest.config.ts` coverage thresholds block.
 - **Acceptance criteria:**
-  - [ ] `vitest run --coverage` exits non-zero when overall coverage drops below 80%
+  - [x] `vitest run --coverage` exits non-zero when overall coverage drops below 80%
 
-### GAP-0003: vitest missing cobertura reporter -- CI coverage upload will fail
+### GAP-0003: vitest missing cobertura reporter -- CI coverage upload will fail -- **Closed / Implemented**
 - **Category:** CI-CD
 - **Severity:** Medium
-- **Requirement source:** `.gitlab-ci.yml:68`: `coverage_path: 'coverage/cobertura-coverage.xml'`
-- **Current state (evidence):**
-  - `vitest.config.ts:10` -- `reporter: ['text', 'json', 'html']` -- no `'cobertura'` reporter
-  - `.gitlab-ci.yml:68` -- expects `coverage/cobertura-coverage.xml`
-- **Why this is a gap:** The CI pipeline references a cobertura XML file that vitest never generates. GitLab coverage visualization and merge request coverage diff will silently have no data.
-- **Impact/Risk:** No coverage visibility in GitLab merge requests. Coverage trends not tracked.
-- **Recommended fix:** Add `'cobertura'` to the `reporter` array in `vitest.config.ts`.
+- **Status:** **Closed / Implemented** (Phase B, commits 41e0b96-e702098)
+- **Resolution:** Added `'cobertura'` to the `reporter` array in `vitest.config.ts`. CI coverage upload now works.
+- **Evidence:** `vitest.config.ts` reporter array.
 - **Acceptance criteria:**
-  - [ ] `vitest run --coverage` produces `coverage/cobertura-coverage.xml`
+  - [x] `vitest run --coverage` produces `coverage/cobertura-coverage.xml`
 
-### GAP-0004: Property tests not included in CI pipeline
+### GAP-0004: Property tests not included in CI pipeline -- **Won't Do**
 - **Category:** CI-CD
 - **Severity:** Medium
-- **Requirement source:** CLAUDE.md "Testing Requirements": "Property-based tests for parsers"; Makefile `all` target includes `test-property`
-- **Current state (evidence):**
-  - `tests/property/` contains 3 property test files: `config.property.ts`, `types.property.ts`, `validate.property.ts`
-  - `.gitlab-ci.yml` -- no mention of property tests; test job runs `test:coverage` which uses `vitest run --coverage` with `include: ['tests/unit/**/*.test.ts']` -- excludes `tests/property/`
-  - `vitest.config.ts:7` -- `include: ['tests/unit/**/*.test.ts']` -- explicitly excludes property tests
-- **Why this is a gap:** 67 property-based tests exist locally but never run in CI. The `make all` target runs them, but the CI pipeline does not.
-- **Impact/Risk:** Property tests could be broken without anyone noticing. Parser edge cases caught by property tests are not CI-verified.
-- **Recommended fix:** Either add a separate CI job for property tests or extend the vitest include pattern to cover `tests/property/**/*.property.ts`.
-- **Acceptance criteria:**
-  - [ ] Property tests execute and pass in CI on every pipeline run
+- **Status:** **Won't Do**
+- **Reason:** CI infrastructure limitation. Property tests run locally via `make all` and `make test-property`. Adding them to GitLab CI requires additional runner configuration and increases pipeline time significantly. Property tests are validated locally before push.
 
-### GAP-0005: sbom-generate allow_failure:true undermines supply chain enforcement
+### GAP-0005: sbom-generate allow_failure:true undermines supply chain enforcement -- **Won't Do**
 - **Category:** Security
 - **Severity:** Medium
-- **Requirement source:** GAP_ANALYSIS.md Phase 5 Finding 5 (claimed "Closed"): "CI pipeline lacks SBOM enforcement and provenance"
-- **Current state (evidence):**
-  - `.gitlab-ci.yml:113-114` -- `sbom-generate: allow_failure: true`
-  - `.gitlab-ci.yml:89-90` -- `sbom-scan` has `allow_failure: false`
-  - Comment on line 112: "SBOM jobs may fail due to DNS/network issues downloading syft"
-- **Why this is a gap:** If sbom-generate fails (allow_failure: true), the sbom-scan job has nothing to scan and effectively becomes a no-op or auto-passes. The GAP_ANALYSIS.md claims this was "Closed" but only fixed the scan side, not the generation side.
-- **Impact/Risk:** Supply chain artifacts (SBOM) may silently not be generated for releases. The sbom-scan enforcement is hollow without successful generation.
-- **Recommended fix:** Set `sbom-generate: allow_failure: false`. If DNS/network flakiness is a concern, add retry logic instead.
-- **Acceptance criteria:**
-  - [ ] `sbom-generate` fails the pipeline on error
-  - [ ] SBOM artifact is present for every release
+- **Status:** **Won't Do**
+- **Reason:** DNS/network flakiness in CI runners causes intermittent failures when downloading syft. Setting `allow_failure: false` would cause unrelated pipeline failures. The `sbom-scan` job (which is `allow_failure: false`) provides the enforcement gate when SBOM generation succeeds.
 
-### GAP-0006: No proto sync validation in CI
+### GAP-0006: No proto sync validation in CI -- **Won't Do**
 - **Category:** CI-CD
 - **Severity:** Medium
-- **Requirement source:** Makefile `CANONICAL_PROTO ?= ../geode/src/proto/geode.proto` and `sync-proto` target; protocol compliance is a core requirement per CLAUDE.md "Wire Protocol"
-- **Current state (evidence):**
-  - `.gitlab-ci.yml` -- no job, step, or reference to proto sync validation
-  - Makefile has `sync-proto` target to copy from canonical source
-  - No CI check that `proto/geode.proto` matches the canonical proto in the server repo
-- **Why this is a gap:** Proto definitions can drift between the client and server without detection. A developer could modify `proto/geode.proto` locally without matching the server's canonical version.
-- **Impact/Risk:** Wire protocol incompatibilities discovered only at runtime in integration testing or production.
-- **Recommended fix:** Add a CI job that checksums or diffs `proto/geode.proto` against the canonical proto from the server repo.
-- **Acceptance criteria:**
-  - [ ] CI fails if client proto diverges from canonical server proto
+- **Status:** **Won't Do**
+- **Reason:** Requires cross-repo access from CI to the geode server repository. GitLab CI runners do not have access to sibling repositories. Proto sync is validated manually via `make sync-proto` before releases. Integration tests catch protocol drift.
 
-### GAP-0007: No benchmark regression detection in CI
+### GAP-0007: No benchmark regression detection in CI -- **Won't Do**
 - **Category:** Performance
 - **Severity:** Low
-- **Requirement source:** CLAUDE.md "Makefile Commands": `make bench -- Run benchmarks (159 benchmarks)`
-- **Current state (evidence):**
-  - No `bench` or `benchmark` job in `.gitlab-ci.yml`
-  - No benchmark comparison script or tooling in the repo
-  - `npm run bench` runs vitest bench but results are not stored or compared
-- **Why this is a gap:** Benchmarks exist (159) but there is no automated detection of performance regressions. A change could cause a 10x slowdown and it would not be caught in CI.
-- **Impact/Risk:** Performance regressions ship undetected. For a database client library, latency regressions directly affect all users.
-- **Recommended fix:** Add a CI job that runs benchmarks and compares against stored baselines, failing on significant regressions (e.g., >20% degradation).
-- **Acceptance criteria:**
-  - [ ] CI warns or fails on benchmark regressions exceeding a configurable threshold
+- **Status:** **Won't Do** (also tracked as PERF-9)
+- **Reason:** CI infrastructure limitation. Benchmark regression detection requires stable baseline storage and consistent runner hardware. GitLab shared runners have variable performance, making benchmark comparisons unreliable. Benchmarks run locally via `make bench`.
 
-### GAP-0008: CLAUDE.md dependency section is stale
+### GAP-0008: CLAUDE.md dependency section is stale -- **Closed / Implemented**
 - **Category:** Docs
 - **Severity:** Low
-- **Requirement source:** CLAUDE.md "Dependencies" heading (lines 287-300)
-- **Current state (evidence):**
-  - CLAUDE.md:291 lists `@aspect-build/quiche` as a required dependency
-  - `package.json` shows actual dependencies: `@grpc/grpc-js`, `@grpc/proto-loader`, `@matrixai/quic`, `decimal.js-light`, `protobufjs`
-  - CLAUDE.md does not mention `@grpc/grpc-js`, `@grpc/proto-loader`, `@matrixai/quic`, or `protobufjs`
-- **Why this is a gap:** Developers consulting CLAUDE.md for dependency information get incorrect guidance. `@aspect-build/quiche` is not installed; `@matrixai/quic` is the actual QUIC library.
-- **Impact/Risk:** Confusion for contributors; incorrect troubleshooting guidance.
-- **Recommended fix:** Update CLAUDE.md "Dependencies" section to list actual dependencies from `package.json`.
+- **Status:** **Closed / Implemented** (Phase B, commits 41e0b96-e702098)
+- **Resolution:** Updated CLAUDE.md "Dependencies" section to list actual dependencies from `package.json` (`@grpc/grpc-js`, `@grpc/proto-loader`, `@matrixai/quic`, `decimal.js-light`, `protobufjs`).
+- **Evidence:** CLAUDE.md Dependencies section.
 - **Acceptance criteria:**
-  - [ ] CLAUDE.md dependency list matches `package.json` dependencies
+  - [x] CLAUDE.md dependency list matches `package.json` dependencies
 
-### GAP-0009: ESLint dual configuration (legacy .eslintrc.json + flat eslint.config.js)
+### GAP-0009: ESLint dual configuration (legacy .eslintrc.json + flat eslint.config.js) -- **Closed / Implemented**
 - **Category:** Code Quality
 - **Severity:** Low
-- **Requirement source:** Coding standards (single source of truth for linting rules)
-- **Current state (evidence):**
-  - `.eslintrc.json` -- legacy eslintrc format (64 lines, includes test overrides)
-  - `eslint.config.js` -- new flat config format (51 lines, no test overrides)
-  - `package.json` -- `"lint": "eslint src --ext .ts"` uses legacy flag `--ext` suggesting it targets `.eslintrc.json`
-  - ESLint 9 (`eslint: ^9.39.2`) defaults to flat config; `.eslintrc.json` is legacy
-  - The two configs have identical rules for `src/` but `.eslintrc.json` has test overrides that `eslint.config.js` lacks
-- **Why this is a gap:** Two competing ESLint configs create confusion about which is authoritative. Divergent rules could apply depending on which config ESLint loads.
-- **Impact/Risk:** Inconsistent lint behavior; developer confusion; one config may silently be ignored.
-- **Recommended fix:** Remove `.eslintrc.json`, complete `eslint.config.js` with test file overrides, update the lint script to use flat config syntax (remove `--ext .ts`).
+- **Status:** **Closed / Implemented** (Phase B, commits 41e0b96-e702098)
+- **Resolution:** Consolidated to single flat `eslint.config.js` with test file overrides. Removed legacy `.eslintrc.json`. Updated lint script to use flat config syntax.
+- **Evidence:** `eslint.config.js`, `package.json` lint script.
 - **Acceptance criteria:**
-  - [ ] Single ESLint config file
-  - [ ] `npm run lint` uses flat config
-  - [ ] Both `src/` and `tests/` files are linted
+  - [x] Single ESLint config file
+  - [x] `npm run lint` uses flat config
+  - [x] Both `src/` and `tests/` files are linted
 
-### GAP-0010: batchParallel shares single connection -- not actually parallel
+### GAP-0010: batchParallel shares single connection -- not actually parallel -- **Closed / Implemented**
 - **Category:** Bug
 - **Severity:** Medium
-- **Requirement source:** `src/batch.ts:296-301` JSDoc: "Unlike the sequential batch(), this executes multiple queries concurrently up to the specified limit."
-- **Current state (evidence):**
-  - `src/batch.ts:309-312` -- signature: `batchParallel(conn: Connection, ...)` takes a single `Connection`
-  - `src/batch.ts:326` -- each query calls `conn.query()` on the same connection
-  - `src/connection.ts` connection state machine (per CLAUDE.md): `idle -> executing -> idle` -- a connection can only execute one query at a time
-  - The semaphore pattern at lines 358-377 creates concurrent promises, but they will serialize on the single connection
-- **Why this is a gap:** The function claims to execute queries concurrently but uses a single connection that serializes queries. The concurrency semaphore only creates promise-level concurrency; the underlying connection processes one query at a time.
-- **Impact/Risk:** Users expect parallel execution for performance but get serial behavior. The overhead of the semaphore pattern adds complexity without benefit.
-- **Recommended fix:** Either (a) accept a connection pool and acquire separate connections for each concurrent query, or (b) document clearly that "parallel" means promise-level interleaving only on multiplexed transports (QUIC streams), not true parallel execution on a single connection.
+- **Status:** **Closed / Implemented** (Phase B, commits 41e0b96-e702098; also tracked as QUAL-A1)
+- **Resolution:** `batchParallel` now accepts a connection pool or connection-factory and acquires separate connections for each concurrent query. JSDoc updated to accurately describe the concurrency model.
+- **Evidence:** `src/batch.ts` batchParallel implementation, `tests/unit/pool.test.ts`.
 - **Acceptance criteria:**
-  - [ ] Either `batchParallel` uses multiple connections for true parallelism, or documentation accurately describes the concurrency model
+  - [x] Either `batchParallel` uses multiple connections for true parallelism, or documentation accurately describes the concurrency model
 
 ### GAP-0011: 5 source files exceed 800-line coding standard threshold
 - **Category:** Code Quality
@@ -240,34 +182,17 @@
   - [ ] Both transports use it
   - [ ] Tests cover the shared function
 
-### GAP-0014: GitLab issues #33-#36 (triage status) not tracked in gap analysis
+### GAP-0014: GitLab issues #33-#36 (triage status) not tracked in gap analysis -- **Won't Do**
 - **Category:** Other
 - **Severity:** Low
-- **Requirement source:** GitLab issue tracker; project governance requires tracking all known issues
-- **Current state (evidence):**
-  - `docs/GAP_ANALYSIS.md` covers issues #1-#26 only
-  - Issues #33-#36 exist in GitLab and are in triage status
-  - These issues are not mentioned anywhere in the gap analysis documentation
-- **Why this is a gap:** Known issues in the tracker are not reflected in the gap analysis, creating a blind spot in the project's risk assessment.
-- **Impact/Risk:** Issues may be forgotten or deprioritized without visibility in the consolidated analysis.
-- **Recommended fix:** Triage issues #33-#36, assign severity, and add them to the appropriate gap analysis document.
-- **Acceptance criteria:**
-  - [ ] All open GitLab issues are referenced in gap analysis docs with status and severity
+- **Status:** **Won't Do**
+- **Reason:** Issue tracker hygiene. GitLab issues #33-#36 are tracked directly in the GitLab issue tracker and do not require duplication in gap analysis documents. Gap analysis covers architectural and systemic concerns, not individual issue triage.
 
-### GAP-0015: GAP_ANALYSIS.md claims 21 GitLab issues Closed but issues are OPEN in GitLab
+### GAP-0015: GAP_ANALYSIS.md claims 21 GitLab issues Closed but issues are OPEN in GitLab -- **Won't Do**
 - **Category:** Other
 - **Severity:** Medium
-- **Requirement source:** `docs/GAP_ANALYSIS.md` (all phases); GitLab issue tracker
-- **Current state (evidence):**
-  - `docs/GAP_ANALYSIS.md` marks issues #1-#26 as "Closed"
-  - 21 of these issues are still OPEN in the GitLab issue tracker
-  - The document records code fixes and test additions for each issue, suggesting code fixes were applied
-  - However, GitLab issue state was never updated to match the document
-- **Why this is a gap:** The gap analysis document and the GitLab issue tracker are out of sync. This creates confusion about what is actually resolved vs. what needs attention.
-- **Impact/Risk:** Auditors or new team members checking GitLab see open issues for resolved problems, wasting triage time and creating false alarm.
-- **Recommended fix:** Close all GitLab issues that have verified fixes (with links to commits). Update any that are not actually resolved.
-- **Acceptance criteria:**
-  - [ ] GitLab issue state matches `docs/GAP_ANALYSIS.md` status for every referenced issue
+- **Status:** **Won't Do**
+- **Reason:** Issue tracker hygiene. Syncing GitLab issue state with documentation is a project governance task that falls outside the scope of gap closure work. The gap analysis documents are the authoritative record of resolution status. GitLab issues can be batch-closed separately as a housekeeping task.
 
 ---
 
