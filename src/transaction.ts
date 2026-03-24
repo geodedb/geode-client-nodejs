@@ -144,10 +144,10 @@ export class Transaction {
    */
   private checkDone(): void {
     if (this._done) {
-      throw ErrTxDone;
+      throw ErrTxDone();
     }
     if (!this._conn.inTransaction) {
-      throw ErrNoTx;
+      throw ErrNoTx();
     }
   }
 }

@@ -440,7 +440,7 @@ export class GrpcTransport implements Transport {
    */
   private checkClosed(): void {
     if (this._closed) {
-      throw ErrClosed;
+      throw ErrClosed();
     }
   }
 }

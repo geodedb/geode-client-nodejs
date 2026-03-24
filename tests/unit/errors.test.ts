@@ -9,9 +9,21 @@ import {
   isDriverError,
   isGeodeError,
   isRetryableError,
+  isSentinelError,
   ErrClosed,
   ErrQueryInProgress,
   ErrTxInProgress,
+  ErrNoTx,
+  ErrTxDone,
+  ErrRowsClosed,
+  ErrBadConn,
+  ERR_CLOSED_MESSAGE,
+  ERR_QUERY_IN_PROGRESS_MESSAGE,
+  ERR_TX_IN_PROGRESS_MESSAGE,
+  ERR_NO_TX_MESSAGE,
+  ERR_TX_DONE_MESSAGE,
+  ERR_ROWS_CLOSED_MESSAGE,
+  ERR_BAD_CONN_MESSAGE,
 } from '../../src/errors.js';
 
 describe('errors', () => {
@@ -382,11 +394,53 @@ describe('errors', () => {
     });
   });
 
-  describe('sentinel errors', () => {
-    it('should have correct messages', () => {
-      expect(ErrClosed.message).toBe('geode: connection closed');
-      expect(ErrQueryInProgress.message).toBe('geode: query already in progress');
-      expect(ErrTxInProgress.message).toBe('geode: transaction already in progress');
+  describe('sentinel error factories', () => {
+    it('should produce errors with correct messages', () => {
+      expect(ErrClosed().message).toBe('geode: connection closed');
+      expect(ErrQueryInProgress().message).toBe('geode: query already in progress');
+      expect(ErrTxInProgress().message).toBe('geode: transaction already in progress');
+      expect(ErrNoTx().message).toBe('geode: no transaction in progress');
+      expect(ErrTxDone().message).toBe('geode: transaction already committed or rolled back');
+      expect(ErrRowsClosed().message).toBe('geode: rows closed');
+      expect(ErrBadConn().message).toBe('geode: bad connection');
+    });
+
+    it('should produce fresh Error instances on each call', () => {
+      const err1 = ErrClosed();
+      const err2 = ErrClosed();
+      expect(err1).not.toBe(err2);
+      expect(err1.message).toBe(err2.message);
+    });
+
+    it('should have accurate stack traces at the call site', () => {
+      const err = ErrClosed();
+      // Stack should reference this test file, not the errors.ts module load
+      expect(err.stack).toBeDefined();
+      expect(err.stack).toContain('errors.test');
+    });
+
+    it('should export message constants for identity checks', () => {
+      expect(ERR_CLOSED_MESSAGE).toBe('geode: connection closed');
+      expect(ERR_QUERY_IN_PROGRESS_MESSAGE).toBe('geode: query already in progress');
+      expect(ERR_TX_IN_PROGRESS_MESSAGE).toBe('geode: transaction already in progress');
+      expect(ERR_NO_TX_MESSAGE).toBe('geode: no transaction in progress');
+      expect(ERR_TX_DONE_MESSAGE).toBe('geode: transaction already committed or rolled back');
+      expect(ERR_ROWS_CLOSED_MESSAGE).toBe('geode: rows closed');
+      expect(ERR_BAD_CONN_MESSAGE).toBe('geode: bad connection');
+    });
+  });
+
+  describe('isSentinelError', () => {
+    it('should match errors by message', () => {
+      const err = ErrClosed();
+      expect(isSentinelError(err, ERR_CLOSED_MESSAGE)).toBe(true);
+      expect(isSentinelError(err, ERR_QUERY_IN_PROGRESS_MESSAGE)).toBe(false);
+    });
+
+    it('should return false for non-Error values', () => {
+      expect(isSentinelError(null, ERR_CLOSED_MESSAGE)).toBe(false);
+      expect(isSentinelError('string', ERR_CLOSED_MESSAGE)).toBe(false);
+      expect(isSentinelError(42, ERR_CLOSED_MESSAGE)).toBe(false);
     });
   });
 });

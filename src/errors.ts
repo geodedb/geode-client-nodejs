@@ -191,14 +191,45 @@ export type ConnectionState =
   | 'closed'
   | 'error';
 
-// Sentinel errors
-export const ErrClosed = new Error('geode: connection closed');
-export const ErrQueryInProgress = new Error('geode: query already in progress');
-export const ErrTxInProgress = new Error('geode: transaction already in progress');
-export const ErrNoTx = new Error('geode: no transaction in progress');
-export const ErrTxDone = new Error('geode: transaction already committed or rolled back');
-export const ErrRowsClosed = new Error('geode: rows closed');
-export const ErrBadConn = new Error('geode: bad connection');
+// Sentinel error messages (stable strings for identity checks)
+export const ERR_CLOSED_MESSAGE = 'geode: connection closed';
+export const ERR_QUERY_IN_PROGRESS_MESSAGE = 'geode: query already in progress';
+export const ERR_TX_IN_PROGRESS_MESSAGE = 'geode: transaction already in progress';
+export const ERR_NO_TX_MESSAGE = 'geode: no transaction in progress';
+export const ERR_TX_DONE_MESSAGE = 'geode: transaction already committed or rolled back';
+export const ERR_ROWS_CLOSED_MESSAGE = 'geode: rows closed';
+export const ERR_BAD_CONN_MESSAGE = 'geode: bad connection';
+
+// Sentinel error factory functions
+// Each call creates a fresh Error with an accurate stack trace at the throw site.
+export function ErrClosed(): Error {
+  return new Error(ERR_CLOSED_MESSAGE);
+}
+export function ErrQueryInProgress(): Error {
+  return new Error(ERR_QUERY_IN_PROGRESS_MESSAGE);
+}
+export function ErrTxInProgress(): Error {
+  return new Error(ERR_TX_IN_PROGRESS_MESSAGE);
+}
+export function ErrNoTx(): Error {
+  return new Error(ERR_NO_TX_MESSAGE);
+}
+export function ErrTxDone(): Error {
+  return new Error(ERR_TX_DONE_MESSAGE);
+}
+export function ErrRowsClosed(): Error {
+  return new Error(ERR_ROWS_CLOSED_MESSAGE);
+}
+export function ErrBadConn(): Error {
+  return new Error(ERR_BAD_CONN_MESSAGE);
+}
+
+/**
+ * Check if an error is a specific sentinel error by message.
+ */
+export function isSentinelError(err: unknown, message: string): boolean {
+  return err instanceof Error && err.message === message;
+}
 
 /**
  * Type guard for DriverError.

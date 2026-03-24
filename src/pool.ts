@@ -220,7 +220,7 @@ export class ConnectionPool {
    */
   async acquire(signal?: AbortSignal): Promise<Connection> {
     if (this._closed) {
-      throw ErrClosed;
+      throw ErrClosed();
     }
 
     if (signal?.aborted) {
@@ -397,7 +397,7 @@ export class ConnectionPool {
 
     // Reject all waiters
     for (const waiter of this._waitQueue) {
-      waiter.reject(ErrClosed);
+      waiter.reject(ErrClosed());
     }
     this._waitQueue = [];
 

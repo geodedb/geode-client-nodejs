@@ -131,6 +131,46 @@ export class QueryResult implements AsyncIterable<Row> {
   }
 
   /**
+   * Collect all remaining rows as raw records without GQLValue conversion.
+   * This is the fast path used by queryAll() to avoid double-conversion.
+   */
+  async _collectRawRecords(): Promise<Record<string, unknown>[]> {
+    try {
+      const records: Record<string, unknown>[] = [];
+
+      while (!this._closed) {
+        if (this._signal?.aborted) {
+          break;
+        }
+
+        // Drain buffered raw rows
+        while (this._bufferIndex < this._buffer.length) {
+          const rawRow = this._buffer[this._bufferIndex];
+          if (rawRow) {
+            this._bufferIndex++;
+            this._rowCount++;
+            records.push(rawRow);
+          }
+        }
+
+        if (this._final) {
+          break;
+        }
+
+        // Fetch next page
+        const { rows, final } = await this._conn._fetchNextPage(this._pageSize, this._signal);
+        this._buffer = rows;
+        this._bufferIndex = 0;
+        this._final = final;
+      }
+
+      return records;
+    } finally {
+      this.close();
+    }
+  }
+
+  /**
    * Get all remaining rows as an array.
    */
   async toArray(): Promise<Row[]> {

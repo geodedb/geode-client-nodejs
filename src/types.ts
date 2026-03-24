@@ -178,14 +178,14 @@ export interface GQLPath {
 export class GQLValue {
   readonly kind: GQLValueKind;
 
-  private _intValue: bigint = 0n;
-  private _floatValue: number = 0;
-  private _boolValue: boolean = false;
-  private _stringValue: string = '';
+  private _intValue?: bigint;
+  private _floatValue?: number;
+  private _boolValue?: boolean;
+  private _stringValue?: string;
   private _decimalValue?: Decimal;
-  private _arrayValue: GQLValue[] = [];
-  private _objectValue: Map<string, GQLValue> = new Map();
-  private _bytesValue: Uint8Array = new Uint8Array();
+  private _arrayValue?: GQLValue[];
+  private _objectValue?: Map<string, GQLValue>;
+  private _bytesValue?: Uint8Array;
   private _dateValue?: Date;
   private _rangeValue?: GQLRange;
   private _nodeValue?: GQLNode;
@@ -319,22 +319,22 @@ export class GQLValue {
     if (this.kind !== 'BOOL') {
       throw new TypeError(`Cannot convert ${this.kind} to boolean`);
     }
-    return this._boolValue;
+    return this._boolValue!;
   }
 
   get asInt(): bigint {
     if (this.kind !== 'INT') {
       throw new TypeError(`Cannot convert ${this.kind} to int`);
     }
-    return this._intValue;
+    return this._intValue!;
   }
 
   get asNumber(): number {
     if (this.kind === 'INT') {
-      return Number(this._intValue);
+      return Number(this._intValue!);
     }
     if (this.kind === 'FLOAT') {
-      return this._floatValue;
+      return this._floatValue!;
     }
     if (this.kind === 'DECIMAL') {
       return this._decimalValue?.toNumber() ?? 0;
@@ -346,12 +346,12 @@ export class GQLValue {
     if (this.kind !== 'FLOAT') {
       throw new TypeError(`Cannot convert ${this.kind} to float`);
     }
-    return this._floatValue;
+    return this._floatValue!;
   }
 
   get asString(): string {
     if (this.kind === 'STRING' || this.kind === 'UUID') {
-      return this._stringValue;
+      return this._stringValue!;
     }
     // Allow stringification of other types
     return this.toString();
@@ -368,21 +368,21 @@ export class GQLValue {
     if (this.kind !== 'ARRAY') {
       throw new TypeError(`Cannot convert ${this.kind} to array`);
     }
-    return this._arrayValue;
+    return this._arrayValue!;
   }
 
   get asObject(): Map<string, GQLValue> {
     if (this.kind !== 'OBJECT' && this.kind !== 'NODE' && this.kind !== 'EDGE') {
       throw new TypeError(`Cannot convert ${this.kind} to object`);
     }
-    return this._objectValue;
+    return this._objectValue ?? new Map();
   }
 
   get asBytes(): Uint8Array {
     if (this.kind !== 'BYTEA') {
       throw new TypeError(`Cannot convert ${this.kind} to bytes`);
     }
-    return this._bytesValue;
+    return this._bytesValue!;
   }
 
   get asDate(): Date {
@@ -442,24 +442,24 @@ export class GQLValue {
       case 'NULL':
         return 'null';
       case 'BOOL':
-        return this._boolValue.toString();
+        return (this._boolValue ?? false).toString();
       case 'INT':
-        return this._intValue.toString();
+        return (this._intValue ?? 0n).toString();
       case 'FLOAT':
-        return this._floatValue.toString();
+        return (this._floatValue ?? 0).toString();
       case 'STRING':
       case 'UUID':
-        return this._stringValue;
+        return this._stringValue ?? '';
       case 'DECIMAL':
         return this._decimalValue?.toString() ?? '0';
       case 'ARRAY':
-        return `[${this._arrayValue.map((v) => v.toString()).join(', ')}]`;
+        return `[${(this._arrayValue ?? []).map((v) => v.toString()).join(', ')}]`;
       case 'OBJECT':
-        return `{${[...this._objectValue.entries()]
+        return `{${[...(this._objectValue ?? new Map()).entries()]
           .map(([k, v]) => `${k}: ${v.toString()}`)
           .join(', ')}}`;
       case 'BYTEA':
-        return `<bytes:${this._bytesValue.length}>`;
+        return `<bytes:${(this._bytesValue ?? new Uint8Array()).length}>`;
       case 'DATE':
       case 'TIME':
       case 'TIMETZ':
@@ -490,28 +490,27 @@ export class GQLValue {
       case 'NULL':
         return null;
       case 'BOOL':
-        return this._boolValue;
-      case 'INT':
+        return this._boolValue ?? false;
+      case 'INT': {
         // Return number if safe, bigint otherwise
-        if (
-          this._intValue >= Number.MIN_SAFE_INTEGER &&
-          this._intValue <= Number.MAX_SAFE_INTEGER
-        ) {
-          return Number(this._intValue);
+        const intVal = this._intValue ?? 0n;
+        if (intVal >= Number.MIN_SAFE_INTEGER && intVal <= Number.MAX_SAFE_INTEGER) {
+          return Number(intVal);
         }
-        return this._intValue;
+        return intVal;
+      }
       case 'FLOAT':
-        return this._floatValue;
+        return this._floatValue ?? 0;
       case 'STRING':
       case 'UUID':
-        return this._stringValue;
+        return this._stringValue ?? '';
       case 'DECIMAL':
         return this._decimalValue?.toString();
       case 'ARRAY':
-        return this._arrayValue.map((v) => v.toJS());
+        return (this._arrayValue ?? []).map((v) => v.toJS());
       case 'OBJECT': {
         const obj = Object.create(null) as Record<string, unknown>;
-        for (const [k, v] of this._objectValue.entries()) {
+        for (const [k, v] of (this._objectValue ?? new Map()).entries()) {
           if (!isSafeObjectKey(k)) {
             throw new Error(
               `Object contains dangerous key that could cause prototype pollution: keys like '__proto__', 'constructor', or 'prototype' are not allowed`
@@ -522,7 +521,7 @@ export class GQLValue {
         return obj;
       }
       case 'BYTEA':
-        return this._bytesValue;
+        return this._bytesValue ?? new Uint8Array();
       case 'DATE':
       case 'TIME':
       case 'TIMETZ':

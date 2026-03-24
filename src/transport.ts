@@ -515,7 +515,7 @@ export class QuicTransport extends BaseTransport {
 
     // Reject pending reads and clear buffers
     for (const pending of this._pendingProtoReads) {
-      pending.reject(ErrClosed);
+      pending.reject(ErrClosed());
     }
     this._pendingProtoReads = [];
     this._chunks = [];

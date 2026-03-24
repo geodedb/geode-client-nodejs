@@ -379,20 +379,10 @@ export class Connection {
    */
   async queryAll(query: string, options?: QueryOptions): Promise<Record<string, unknown>[]> {
     const result = await this.query(query, options);
-    const rows: Record<string, unknown>[] = [];
-
-    for await (const row of result) {
-      // Convert row values to plain objects
-      // Row is a Map<string, GQLValue>, so use .get() to access values
-      const obj: Record<string, unknown> = {};
-      for (const col of result.columns) {
-        const value = row.get(col.name);
-        obj[col.name] = value?.toJS();
-      }
-      rows.push(obj);
-    }
-
-    return rows;
+    // Fast path: collect raw records directly from the buffer
+    // without intermediate GQLValue allocation and toJS() conversion.
+    // The raw records are already plain JS objects from rowToRecord/protoValueToJS.
+    return result._collectRawRecords();
   }
 
   /**
@@ -571,7 +561,7 @@ export class Connection {
     this.checkState('begin');
 
     if (this._inTransaction) {
-      throw ErrTxInProgress;
+      throw ErrTxInProgress();
     }
 
     const msg = buildBeginRequest(false, this._sessionId);
@@ -706,7 +696,7 @@ export class Connection {
    */
   async ping(signal?: AbortSignal): Promise<void> {
     if (this._state === 'closed') {
-      throw ErrClosed;
+      throw ErrClosed();
     }
 
     const msg = buildPingRequest();
@@ -734,7 +724,7 @@ export class Connection {
    */
   async reset(signal?: AbortSignal): Promise<void> {
     if (this._state === 'closed') {
-      throw ErrClosed;
+      throw ErrClosed();
     }
 
     // Rollback any active transaction
@@ -802,15 +792,15 @@ export class Connection {
    */
   private checkState(operation: string): void {
     if (this._state === 'closed') {
-      throw ErrClosed;
+      throw ErrClosed();
     }
 
     if (this._state === 'fetching' || this._activeResult) {
-      throw ErrQueryInProgress;
+      throw ErrQueryInProgress();
     }
 
     if (operation === 'begin' && this._inTransaction) {
-      throw ErrTxInProgress;
+      throw ErrTxInProgress();
     }
   }
 
