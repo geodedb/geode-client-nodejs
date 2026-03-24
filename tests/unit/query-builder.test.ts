@@ -1,5 +1,12 @@
-import { describe, it, expect } from 'vitest';
-import { query, pattern, predicate, node, edge } from '../../src/query-builder.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  query,
+  pattern,
+  predicate,
+  node,
+  edge,
+  _resetRawWarnings,
+} from '../../src/query-builder.js';
 
 describe('query-builder', () => {
   describe('QueryBuilder', () => {
@@ -430,6 +437,74 @@ describe('query-builder', () => {
       const result = n.toGQL();
       expect(result).toContain('valid_name');
       expect(result).toContain('age');
+    });
+  });
+
+  describe('SEC-P6-7: raw() runtime deprecation warnings', () => {
+    beforeEach(() => {
+      _resetRawWarnings();
+    });
+
+    it('should emit deprecation warning on first PredicateBuilder.raw() call', () => {
+      const warnSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => {});
+
+      predicate().raw('n.x > 0');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('PredicateBuilder.raw()'),
+        'DeprecationWarning'
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it('should emit deprecation warning only once for PredicateBuilder.raw()', () => {
+      const warnSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => {});
+
+      predicate().raw('n.x > 0');
+      predicate().raw('n.y > 0');
+      predicate().raw('n.z > 0');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      warnSpy.mockRestore();
+    });
+
+    it('should emit deprecation warning on first QueryBuilder.raw() call', () => {
+      const warnSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => {});
+
+      query().raw('CALL db.indexes() YIELD name');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('QueryBuilder.raw()'),
+        'DeprecationWarning'
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it('should emit deprecation warning only once for QueryBuilder.raw()', () => {
+      const warnSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => {});
+
+      query().raw('CALL db.indexes()');
+      query().raw('CALL db.labels()');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      warnSpy.mockRestore();
+    });
+
+    it('should emit separate warnings for PredicateBuilder and QueryBuilder raw()', () => {
+      const warnSpy = vi.spyOn(process, 'emitWarning').mockImplementation(() => {});
+
+      predicate().raw('n.x > 0');
+      query().raw('CALL db.indexes()');
+
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+
+      warnSpy.mockRestore();
     });
   });
 });

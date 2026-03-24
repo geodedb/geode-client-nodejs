@@ -13,6 +13,7 @@ import {
   validateRLSAction,
   validateRoleName,
   validateRLSPredicate,
+  validateUsername,
   escapeGQLIdentifier,
 } from './validate.js';
 
@@ -233,7 +234,7 @@ export class AuthClient {
    * @param options - User creation options
    */
   async createUser(username: string, options: CreateUserOptions): Promise<void> {
-    this.validateUsername(username);
+    validateUsername(username);
     this.validatePassword(options.password);
 
     // Validate role names if provided
@@ -268,7 +269,7 @@ export class AuthClient {
    * @param username - Username to delete
    */
   async deleteUser(username: string): Promise<void> {
-    this.validateUsername(username);
+    validateUsername(username);
 
     await this._conn.exec('DROP USER $username', {
       params: { username },
@@ -282,7 +283,7 @@ export class AuthClient {
    * @returns User information or null if not found
    */
   async getUser(username: string): Promise<User | null> {
-    this.validateUsername(username);
+    validateUsername(username);
 
     const result = await this._conn.queryAll('SHOW USER $username', { params: { username } });
 
@@ -328,7 +329,7 @@ export class AuthClient {
    * @param newPassword - New password
    */
   async changePassword(username: string, newPassword: string): Promise<void> {
-    this.validateUsername(username);
+    validateUsername(username);
     this.validatePassword(newPassword);
 
     await this._conn.exec('ALTER USER $username SET password = $password', {
@@ -342,7 +343,7 @@ export class AuthClient {
    * @param username - Username to activate
    */
   async activateUser(username: string): Promise<void> {
-    this.validateUsername(username);
+    validateUsername(username);
 
     await this._conn.exec('ALTER USER $username SET active = true', {
       params: { username },
@@ -355,7 +356,7 @@ export class AuthClient {
    * @param username - Username to deactivate
    */
   async deactivateUser(username: string): Promise<void> {
-    this.validateUsername(username);
+    validateUsername(username);
 
     await this._conn.exec('ALTER USER $username SET active = false', {
       params: { username },
@@ -371,7 +372,7 @@ export class AuthClient {
    * @param options - Role creation options
    */
   async createRole(name: string, options?: CreateRoleOptions): Promise<void> {
-    this.validateRoleName(name);
+    validateRoleName(name);
 
     let query = 'CREATE ROLE $name';
     if (options?.description) {
@@ -399,7 +400,7 @@ export class AuthClient {
    * @param name - Role name to delete
    */
   async deleteRole(name: string): Promise<void> {
-    this.validateRoleName(name);
+    validateRoleName(name);
 
     await this._conn.exec('DROP ROLE $name', {
       params: { name },
@@ -413,7 +414,7 @@ export class AuthClient {
    * @returns Role information or null if not found
    */
   async getRole(name: string): Promise<Role | null> {
-    this.validateRoleName(name);
+    validateRoleName(name);
 
     const result = await this._conn.queryAll('SHOW ROLE $name', { params: { name } });
 
@@ -452,8 +453,8 @@ export class AuthClient {
    * @param roleName - Role to assign
    */
   async assignRole(username: string, roleName: string): Promise<void> {
-    this.validateUsername(username);
-    this.validateRoleName(roleName);
+    validateUsername(username);
+    validateRoleName(roleName);
 
     await this._conn.exec('GRANT ROLE $role TO $user', {
       params: { role: roleName, user: username },
@@ -467,8 +468,8 @@ export class AuthClient {
    * @param roleName - Role to revoke
    */
   async revokeRole(username: string, roleName: string): Promise<void> {
-    this.validateUsername(username);
-    this.validateRoleName(roleName);
+    validateUsername(username);
+    validateRoleName(roleName);
 
     await this._conn.exec('REVOKE ROLE $role FROM $user', {
       params: { role: roleName, user: username },
@@ -482,7 +483,7 @@ export class AuthClient {
    * @param permission - Permission to grant
    */
   async grantPermission(roleName: string, permission: Permission): Promise<void> {
-    this.validateRoleName(roleName);
+    validateRoleName(roleName);
 
     // Validate permission action and resource against allowlists
     validatePermissionAction(permission.action);
@@ -510,7 +511,7 @@ export class AuthClient {
    * @param permission - Permission to revoke
    */
   async revokePermission(roleName: string, permission: Permission): Promise<void> {
-    this.validateRoleName(roleName);
+    validateRoleName(roleName);
 
     // Validate permission action and resource against allowlists
     validatePermissionAction(permission.action);
@@ -728,27 +729,6 @@ export class AuthClient {
 
   // Validation helpers
 
-  private validateUsername(username: string): void {
-    if (!username || username.length === 0) {
-      throw new SecurityError({
-        type: 'validation',
-        message: 'Username cannot be empty',
-      });
-    }
-    if (username.length > 128) {
-      throw new SecurityError({
-        type: 'validation',
-        message: 'Username too long (max 128 characters)',
-      });
-    }
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(username)) {
-      throw new SecurityError({
-        type: 'validation',
-        message: 'Invalid username format',
-      });
-    }
-  }
-
   private validatePassword(password: string): void {
     const policy = this._passwordPolicy;
 
@@ -798,27 +778,6 @@ export class AuthClient {
           message: `Password must contain at least one special character (${policy.specialChars})`,
         });
       }
-    }
-  }
-
-  private validateRoleName(name: string): void {
-    if (!name || name.length === 0) {
-      throw new SecurityError({
-        type: 'validation',
-        message: 'Role name cannot be empty',
-      });
-    }
-    if (name.length > 128) {
-      throw new SecurityError({
-        type: 'validation',
-        message: 'Role name too long (max 128 characters)',
-      });
-    }
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
-      throw new SecurityError({
-        type: 'validation',
-        message: 'Invalid role name format',
-      });
     }
   }
 

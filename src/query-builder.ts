@@ -12,6 +12,10 @@ import {
   validateVariableName,
 } from './validate.js';
 
+// SEC-P6-7: Module-level flags to emit deprecation warnings only once per process
+let _predicateRawWarned = false;
+let _queryRawWarned = false;
+
 /**
  * Edge direction for pattern matching.
  */
@@ -523,6 +527,15 @@ export class PredicateBuilder {
    * @deprecated Consider using typed predicate methods instead for better security.
    */
   raw(expr: string, params?: QueryParams): this {
+    // SEC-P6-7: Runtime deprecation warning on first use
+    if (!_predicateRawWarned) {
+      _predicateRawWarned = true;
+      process.emitWarning(
+        'PredicateBuilder.raw() is deprecated and bypasses input validation. ' +
+          'Use typed predicate methods (eq, gt, contains, etc.) instead.',
+        'DeprecationWarning'
+      );
+    }
     this._predicates.push(expr);
     if (params) {
       Object.assign(this._params, params);
@@ -766,6 +779,15 @@ export class QueryBuilder {
    * @deprecated Consider using typed query builder methods instead for better security.
    */
   raw(clause: string, params?: QueryParams): this {
+    // SEC-P6-7: Runtime deprecation warning on first use
+    if (!_queryRawWarned) {
+      _queryRawWarned = true;
+      process.emitWarning(
+        'QueryBuilder.raw() is deprecated and bypasses input validation. ' +
+          'Use typed query builder methods instead.',
+        'DeprecationWarning'
+      );
+    }
     this._clauses.push(clause);
     if (params) {
       Object.assign(this._params, params);
@@ -946,4 +968,14 @@ export function node(): NodePatternBuilder {
  */
 export function edge(): EdgePatternBuilder {
   return new EdgePatternBuilder();
+}
+
+/**
+ * Reset raw() deprecation warning flags.
+ * Exported for testing only.
+ * @internal
+ */
+export function _resetRawWarnings(): void {
+  _predicateRawWarned = false;
+  _queryRawWarned = false;
 }

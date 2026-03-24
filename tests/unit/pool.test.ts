@@ -136,6 +136,50 @@ describe('ConnectionPool', () => {
     });
   });
 
+  describe('QUAL-T5: addConnection maxConnections guard', () => {
+    it('should not add connections beyond maxConnections during maintenance', async () => {
+      const config: PoolConfig = {
+        host: 'localhost',
+        port: 3141,
+        transport: 'quic',
+        pageSize: 100,
+        helloName: 'test',
+        helloVersion: '1.0.0',
+        conformance: 'min',
+        minConnections: 3,
+        maxConnections: 2,
+      };
+
+      pool = new ConnectionPool(config);
+
+      // Inject fake connections at max capacity
+      const connections = (
+        pool as unknown as {
+          _connections: Array<{
+            connection: Connection;
+            createdAt: number;
+            lastUsedAt: number;
+            inUse: boolean;
+          }>;
+        }
+      )._connections;
+
+      const fakeConn = { isClosed: false, close: async () => {} } as unknown as Connection;
+      connections.push(
+        { connection: fakeConn, createdAt: Date.now(), lastUsedAt: Date.now(), inUse: false },
+        { connection: fakeConn, createdAt: Date.now(), lastUsedAt: Date.now(), inUse: false }
+      );
+
+      // Call addConnection directly - should be a no-op since we're at max
+      const addConnection = (
+        pool as unknown as { addConnection: () => Promise<void> }
+      ).addConnection.bind(pool);
+      await addConnection();
+
+      expect(connections.length).toBe(2);
+    });
+  });
+
   describe('AbortSignal listener cleanup', () => {
     it('should clean up abort listener on successful acquire', async () => {
       const config: PoolConfig = {

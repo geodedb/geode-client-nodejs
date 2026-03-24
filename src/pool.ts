@@ -418,6 +418,11 @@ export class ConnectionPool {
    * Add a new connection to the pool with rate limiting and exponential backoff.
    */
   private async addConnection(): Promise<void> {
+    // QUAL-T5: Guard against exceeding maxConnections (e.g. from maintenance loop)
+    if (this._connections.length >= this._maxConnections) {
+      return;
+    }
+
     // Check rate limit
     if (!this._rateLimiter.isAllowed()) {
       throw new TransportError({

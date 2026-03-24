@@ -49,13 +49,13 @@ describe('AuthClient', () => {
       it('should reject too long username', async () => {
         const longName = 'a'.repeat(129);
         await expect(auth.createUser(longName, { password: 'secret123' })).rejects.toThrow(
-          'Username too long'
+          'exceeds maximum length of 128 characters'
         );
       });
 
       it('should reject invalid username format', async () => {
         await expect(auth.createUser('123invalid', { password: 'secret123' })).rejects.toThrow(
-          'Invalid username format'
+          'invalid variable'
         );
       });
 
@@ -242,7 +242,7 @@ describe('AuthClient', () => {
       });
 
       it('should reject invalid role name', async () => {
-        await expect(auth.createRole('123invalid')).rejects.toThrow('Invalid role name format');
+        await expect(auth.createRole('123invalid')).rejects.toThrow('invalid variable');
       });
     });
 
