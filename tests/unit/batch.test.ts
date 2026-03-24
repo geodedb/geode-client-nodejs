@@ -2,12 +2,11 @@
  * Unit tests for Batch Operations
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { BatchQuery, BatchResult, BatchSummary, BatchOptions } from '../../src/batch.js';
 import { batch, batchParallel } from '../../src/batch.js';
 import { Connection } from '../../src/connection.js';
 import { MockTransport } from '../../src/transport.js';
-import type { QuicServerMessage } from '../../src/proto.js';
 
 describe('Batch Operations Types', () => {
   describe('BatchQuery interface', () => {

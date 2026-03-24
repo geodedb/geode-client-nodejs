@@ -332,7 +332,7 @@ describe('types', () => {
     });
 
     it('should convert bigint', () => {
-      expect(fromJSON(BigInt(9007199254740993)).kind).toBe('INT');
+      expect(fromJSON(BigInt('9007199254740993')).kind).toBe('INT');
     });
 
     it('should convert strings', () => {

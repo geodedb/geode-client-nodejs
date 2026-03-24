@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { PreparedStatement, extractParameters, type ParameterInfo } from '../../src/prepared.js';
+import { PreparedStatement, extractParameters } from '../../src/prepared.js';
 import type { Connection } from '../../src/connection.js';
 
 // Mock connection - note: avoid naming conflicts with PreparedStatement.query getter

@@ -3,7 +3,6 @@ import { Connection } from '../../src/connection.js';
 import { MockTransport } from '../../src/transport.js';
 import { SecurityError, TransportError } from '../../src/errors.js';
 import { MAX_PAGE_SIZE } from '../../src/config.js';
-import type { QuicServerMessage } from '../../src/proto.js';
 
 describe('Connection', () => {
   let transport: MockTransport;

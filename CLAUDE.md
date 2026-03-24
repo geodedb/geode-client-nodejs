@@ -288,8 +288,11 @@ const { query: gql, params } = q.build();
 
 ### Required
 
-- `@aspect-build/quiche`: QUIC implementation
+- `@grpc/grpc-js`: gRPC transport
+- `@grpc/proto-loader`: Protobuf loading for gRPC
+- `@matrixai/quic`: QUIC transport
 - `decimal.js-light`: Decimal precision
+- `protobufjs`: Protobuf encoding/decoding
 
 ### Development
 
@@ -297,6 +300,7 @@ const { query: gql, params } = q.build();
 - `vitest`: Testing
 - `tsup`: Building
 - `eslint/prettier`: Code quality
+- `fast-check`: Property-based testing
 - `testcontainers`: Integration tests
 
 ## CI/CD

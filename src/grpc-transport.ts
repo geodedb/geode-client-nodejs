@@ -20,7 +20,7 @@ import * as protoLoader from '@grpc/proto-loader';
 import * as fs from 'node:fs';
 import type { GeodeConfig } from './config.js';
 import { getAddress } from './config.js';
-import { TransportError, ErrClosed } from './errors.js';
+import { DriverError, StatusClass, TransportError, ErrClosed } from './errors.js';
 import { validateTLSCertPath } from './validate.js';
 import {
   getProtoPath,
@@ -46,6 +46,12 @@ const PROTO_LOADER_OPTIONS: protoLoader.Options = {
   defaults: true,
   oneofs: true,
 };
+
+// Default backpressure threshold: pause stream when this many messages are buffered
+const DEFAULT_BACKPRESSURE_THRESHOLD = 2;
+
+// Default stream timeout (ms): abort stream if no data received within this period
+const DEFAULT_STREAM_TIMEOUT_MS = 120_000;
 
 // Service client type (dynamically loaded).
 // Method names are camelCase of the proto RPC names.
@@ -82,7 +88,16 @@ export class GrpcTransport implements Transport {
   private _closed = false;
   private _address: string;
   private _pendingResponses: QuicServerMessage[] = [];
+  private _pendingProtoReads: Array<{
+    resolve: (value: QuicServerMessage) => void;
+    reject: (error: Error) => void;
+  }> = [];
   private _activeStream: grpc.ClientReadableStream<unknown> | null = null;
+  private _streamPaused = false;
+  private _backpressureThreshold: number = DEFAULT_BACKPRESSURE_THRESHOLD;
+  private _streamTimeoutMs: number = DEFAULT_STREAM_TIMEOUT_MS;
+  private _streamTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  private _streamComplete = false;
 
   constructor(address: string) {
     this._address = address;
@@ -94,6 +109,11 @@ export class GrpcTransport implements Transport {
   static async connect(cfg: GeodeConfig): Promise<GrpcTransport> {
     const address = getAddress(cfg);
     const transport = new GrpcTransport(address);
+
+    // Configure stream timeout from config (0 = disabled)
+    if (cfg.requestTimeout !== undefined) {
+      transport._streamTimeoutMs = cfg.requestTimeout;
+    }
 
     try {
       // Load proto definition
@@ -195,56 +215,70 @@ export class GrpcTransport implements Transport {
       if (msg.hello) {
         // hello -> Handshake RPC (unary)
         const response = await this.callUnary<HelloResponse>('handshake', msg.hello, signal);
-        this._pendingResponses.push({ hello: response });
+        this.enqueueResponse({ hello: response });
       } else if (msg.execute) {
         // execute -> Execute RPC (server-streaming)
-        // Collects all streamed messages (schema + data pages) into the pending queue.
+        // Starts the stream and resolves after the first message arrives or stream ends.
+        // Subsequent messages are buffered with backpressure.
         await this.callServerStream(msg.execute, signal);
       } else if (msg.pull) {
         // pull -> no separate gRPC RPC; responses are already buffered
         // from the streaming Execute call. If the buffer is empty the
         // caller will get the response via receiveProto which checks
         // the pending queue. Nothing to do here.
-        // However, if no buffered responses remain, that means the
-        // stream completed (final page was already delivered).
-        // Push a synthetic final page so the caller knows we're done.
-        if (this._pendingResponses.length === 0) {
-          this._pendingResponses.push({
-            execute: {
-              status: {
-                statusClass: '00000',
-                statusSubclass: '',
-                additionalStatuses: [],
-                flaggerFindings: [],
-              },
-              payload: 'page',
-              page: { rows: [], final: true, ordered: false, orderKeys: [] },
-            } as ExecutionResponse,
-          });
+        // However, if no buffered responses remain and the stream is complete,
+        // push a synthetic final page so the caller knows we're done.
+        if (this._pendingResponses.length === 0 && this._pendingProtoReads.length === 0) {
+          // Resume the stream if paused, to allow more data to arrive
+          if (this._activeStream && this._streamPaused) {
+            this._streamPaused = false;
+            this._activeStream.resume();
+          }
+          // If the stream is already complete, push a synthetic final page
+          if (this._streamComplete || !this._activeStream) {
+            this.enqueueResponse({
+              execute: {
+                status: {
+                  statusClass: '00000',
+                  statusSubclass: '',
+                  additionalStatuses: [],
+                  flaggerFindings: [],
+                },
+                payload: 'page',
+                page: { rows: [], final: true, ordered: false, orderKeys: [] },
+              } as ExecutionResponse,
+            });
+          }
         }
       } else if (msg.ping) {
         const response = await this.callUnary<PingResponse>('ping', msg.ping, signal);
-        this._pendingResponses.push({ ping: response });
+        this.enqueueResponse({ ping: response });
       } else if (msg.begin) {
         const response = await this.callUnary<BeginResponse>('begin', msg.begin, signal);
-        this._pendingResponses.push({ begin: response });
+        this.enqueueResponse({ begin: response });
       } else if (msg.commit) {
         const response = await this.callUnary<CommitResponse>('commit', msg.commit, signal);
-        this._pendingResponses.push({ commit: response });
+        this.enqueueResponse({ commit: response });
       } else if (msg.rollback) {
         const response = await this.callUnary<RollbackResponse>('rollback', msg.rollback, signal);
-        this._pendingResponses.push({ rollback: response });
+        this.enqueueResponse({ rollback: response });
       } else if (msg.savepoint) {
         // Savepoint is not exposed as a gRPC RPC on the server.
-        throw new TransportError({
-          operation: 'sendProto',
-          cause: new Error('Savepoint is not supported over gRPC transport'),
+        throw new DriverError({
+          statusClass: StatusClass.SYSTEM,
+          subclass: '',
+          code: '58000',
+          message:
+            'Savepoint operations are not supported over gRPC transport. Use QUIC transport (quic://) for savepoint support.',
         });
       } else if (msg.rollbackTo) {
         // RollbackTo is not exposed as a gRPC RPC on the server.
-        throw new TransportError({
-          operation: 'sendProto',
-          cause: new Error('RollbackTo is not supported over gRPC transport'),
+        throw new DriverError({
+          statusClass: StatusClass.SYSTEM,
+          subclass: '',
+          code: '58000',
+          message:
+            'Savepoint operations are not supported over gRPC transport. Use QUIC transport (quic://) for savepoint support.',
         });
       } else {
         throw new TransportError({
@@ -253,7 +287,7 @@ export class GrpcTransport implements Transport {
         });
       }
     } catch (e) {
-      if (e instanceof TransportError) throw e;
+      if (e instanceof TransportError || e instanceof DriverError) throw e;
       throw new TransportError({
         operation: 'sendProto',
         address: this._address,
@@ -264,8 +298,8 @@ export class GrpcTransport implements Transport {
 
   /**
    * Receive a protobuf message from the queue.
+   * If no response is buffered, waits for the next streamed message.
    */
-  // eslint-disable-next-line @typescript-eslint/require-await -- Method must be async for interface compatibility
   async receiveProto(signal?: AbortSignal): Promise<QuicServerMessage> {
     this.checkClosed();
 
@@ -273,10 +307,44 @@ export class GrpcTransport implements Transport {
       throw new TransportError({ operation: 'receiveProto', cause: new Error('Aborted') });
     }
 
-    // Return queued response
+    // Return queued response immediately if available
     const response = this._pendingResponses.shift();
     if (response) {
+      // Resume the stream if backpressure was applied and buffer drained below threshold
+      if (
+        this._activeStream &&
+        this._streamPaused &&
+        this._pendingResponses.length < this._backpressureThreshold
+      ) {
+        this._streamPaused = false;
+        this._activeStream.resume();
+      }
       return response;
+    }
+
+    // If stream is still active, wait for the next message
+    if (this._activeStream && !this._streamComplete) {
+      return new Promise<QuicServerMessage>((resolve, reject) => {
+        const pendingRead = { resolve, reject };
+        this._pendingProtoReads.push(pendingRead);
+
+        // Resume the stream if paused so data can flow
+        if (this._activeStream && this._streamPaused) {
+          this._streamPaused = false;
+          this._activeStream.resume();
+        }
+
+        if (signal) {
+          const onAbort = () => {
+            const idx = this._pendingProtoReads.indexOf(pendingRead);
+            if (idx !== -1) {
+              this._pendingProtoReads.splice(idx, 1);
+            }
+            reject(new TransportError({ operation: 'receiveProto', cause: new Error('Aborted') }));
+          };
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+      });
     }
 
     // No response available - this shouldn't happen with proper sendProto usage
@@ -316,9 +384,18 @@ export class GrpcTransport implements Transport {
     if (this._closed) return;
     this._closed = true;
 
+    this.clearStreamTimeout();
+
     if (this._activeStream) {
       this._activeStream.cancel();
       this._activeStream = null;
+    }
+
+    // Reject any pending reads
+    const pendingReads = this._pendingProtoReads;
+    this._pendingProtoReads = [];
+    for (const p of pendingReads) {
+      p.reject(ErrClosed());
     }
 
     if (this._client) {
@@ -339,6 +416,18 @@ export class GrpcTransport implements Transport {
    */
   getAddress(): string {
     return this._address;
+  }
+
+  /**
+   * Enqueue a response, resolving a pending read if one exists.
+   */
+  private enqueueResponse(response: QuicServerMessage): void {
+    const pending = this._pendingProtoReads.shift();
+    if (pending) {
+      pending.resolve(response);
+    } else {
+      this._pendingResponses.push(response);
+    }
   }
 
   /**
@@ -387,7 +476,9 @@ export class GrpcTransport implements Transport {
 
   /**
    * Call the server-streaming Execute RPC.
-   * Collects all streamed ExecutionResponse messages into _pendingResponses.
+   * Uses backpressure to prevent unbounded buffering: pauses the stream when
+   * the pending response buffer exceeds the threshold, resumes when drained.
+   * Enforces a configurable timeout that fires when no data arrives within the period.
    */
   private callServerStream(request: unknown, signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -402,37 +493,135 @@ export class GrpcTransport implements Transport {
         this._activeStream = null;
       }
 
+      this._streamComplete = false;
+      this._streamPaused = false;
+      let resolved = false;
+
       const stream = this._client.execute(request);
       this._activeStream = stream;
 
+      // PERF-7: Set up stream inactivity timeout
+      this.resetStreamTimeout(stream, reject, () => {
+        resolved = true;
+      });
+
       stream.on('data', (response: unknown) => {
-        this._pendingResponses.push({ execute: response as ExecutionResponse });
+        // Reset the inactivity timeout on each data event
+        this.resetStreamTimeout(stream, reject, () => {
+          resolved = true;
+        });
+
+        this.enqueueResponse({ execute: response as ExecutionResponse });
+
+        // PERF-2: Apply backpressure when buffer exceeds threshold
+        if (this._pendingResponses.length >= this._backpressureThreshold) {
+          this._streamPaused = true;
+          stream.pause();
+        }
+
+        // Resolve the sendProto promise after the first message arrives,
+        // so the caller can start consuming via receiveProto
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
       });
 
       stream.on('end', () => {
+        this.clearStreamTimeout();
         this._activeStream = null;
-        resolve();
+        this._streamComplete = true;
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
       });
 
       stream.on('error', (error: grpc.ServiceError) => {
+        this.clearStreamTimeout();
         this._activeStream = null;
-        reject(
-          new TransportError({
-            operation: 'execute',
-            address: this._address,
-            cause: new Error(`gRPC error ${error.code}: ${error.message}`),
-          })
-        );
+        this._streamComplete = true;
+
+        const transportError = new TransportError({
+          operation: 'execute',
+          address: this._address,
+          cause: new Error(`gRPC error ${error.code}: ${error.message}`),
+        });
+
+        // Reject any pending reads
+        const pendingReads = this._pendingProtoReads;
+        this._pendingProtoReads = [];
+        for (const p of pendingReads) {
+          p.reject(transportError);
+        }
+
+        if (!resolved) {
+          resolved = true;
+          reject(transportError);
+        }
       });
 
       if (signal) {
         const onAbort = () => {
+          this.clearStreamTimeout();
           stream.cancel();
-          reject(new TransportError({ operation: 'execute', cause: new Error('Aborted') }));
+          if (!resolved) {
+            resolved = true;
+            reject(new TransportError({ operation: 'execute', cause: new Error('Aborted') }));
+          }
         };
         signal.addEventListener('abort', onAbort, { once: true });
       }
     });
+  }
+
+  /**
+   * Reset the stream inactivity timeout. If no data arrives within
+   * _streamTimeoutMs, the stream is cancelled and the promise rejected.
+   */
+  private resetStreamTimeout(
+    stream: grpc.ClientReadableStream<unknown>,
+    reject: (error: Error) => void,
+    markResolved: () => void
+  ): void {
+    this.clearStreamTimeout();
+
+    if (this._streamTimeoutMs <= 0) return;
+
+    this._streamTimeoutTimer = setTimeout(() => {
+      this._streamTimeoutTimer = null;
+      this._activeStream = null;
+      this._streamComplete = true;
+      stream.cancel();
+
+      const timeoutError = new TransportError({
+        operation: 'execute',
+        address: this._address,
+        cause: new Error(
+          `gRPC stream timed out: no data received within ${this._streamTimeoutMs}ms`
+        ),
+      });
+
+      // Reject any pending reads
+      const pendingReads = this._pendingProtoReads;
+      this._pendingProtoReads = [];
+      for (const p of pendingReads) {
+        p.reject(timeoutError);
+      }
+
+      markResolved();
+      reject(timeoutError);
+    }, this._streamTimeoutMs);
+  }
+
+  /**
+   * Clear any active stream inactivity timeout.
+   */
+  private clearStreamTimeout(): void {
+    if (this._streamTimeoutTimer !== null) {
+      clearTimeout(this._streamTimeoutTimer);
+      this._streamTimeoutTimer = null;
+    }
   }
 
   /**

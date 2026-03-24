@@ -1,16 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  QueryBuilder,
-  PatternBuilder,
-  PredicateBuilder,
-  NodePatternBuilder,
-  EdgePatternBuilder,
-  query,
-  pattern,
-  predicate,
-  node,
-  edge,
-} from '../../src/query-builder.js';
+import { query, pattern, predicate, node, edge } from '../../src/query-builder.js';
 
 describe('query-builder', () => {
   describe('QueryBuilder', () => {
@@ -305,7 +294,7 @@ describe('query-builder', () => {
 
     it('should build NOT IN predicate', () => {
       const p = predicate().notIn('n.status', ['deleted']);
-      const { predicate: pred, params } = p.build();
+      const { predicate: pred } = p.build();
 
       expect(pred).toBe('n.status NOT IN $pred_1');
     });
@@ -422,7 +411,6 @@ describe('query-builder', () => {
       // because propsToGQL validates keys internally.
       const builder = node().label('Person');
       // Bypass the props() validation by directly setting _properties
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (builder as any)._properties = { 'name) SET n.admin = true //': 'evil' };
 
       // Before the fix: toGQL() would succeed and include the injection payload
@@ -432,7 +420,6 @@ describe('query-builder', () => {
 
     it('should reject SQL-like injection in propsToGQL defense-in-depth layer', () => {
       const builder = node().label('Test');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (builder as any)._properties = { "'; DROP TABLE users --": 'value' };
 
       expect(() => builder.toGQL()).toThrow(/security/i);

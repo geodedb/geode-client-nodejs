@@ -2,7 +2,7 @@
  * Unit tests for GeodeClient - QUAL-A2, QUAL-A3, QUAL-R1 gap closures
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // We test the specific bugs at the module level by importing the source directly
 // and constructing scenarios that demonstrate the defects.
