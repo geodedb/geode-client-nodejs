@@ -66,6 +66,76 @@ describe('ConnectionPool', () => {
     });
   });
 
+  describe('PERF-8: maintenance interval unref', () => {
+    it('should call unref on the maintenance interval', () => {
+      const config: PoolConfig = {
+        host: 'localhost',
+        port: 3141,
+        transport: 'quic',
+        pageSize: 100,
+        helloName: 'test',
+        helloVersion: '1.0.0',
+        conformance: 'min',
+      };
+
+      pool = new ConnectionPool(config);
+
+      // Access the internal interval via the private field
+      const interval = (pool as unknown as { _maintenanceInterval: NodeJS.Timeout })
+        ._maintenanceInterval;
+      expect(interval).toBeDefined();
+
+      // The interval should have been unref'd. We verify by checking that
+      // hasRef() returns false (Node.js Timeout API)
+      if (typeof interval.hasRef === 'function') {
+        expect(interval.hasRef()).toBe(false);
+      }
+    });
+  });
+
+  describe('PERF-13: pool stats single pass', () => {
+    it('should return correct stats with single pass', () => {
+      const config: PoolConfig = {
+        host: 'localhost',
+        port: 3141,
+        transport: 'quic',
+        pageSize: 100,
+        helloName: 'test',
+        helloVersion: '1.0.0',
+        conformance: 'min',
+      };
+
+      pool = new ConnectionPool(config);
+
+      // Inject fake connections to test stats calculation
+      const connections = (
+        pool as unknown as {
+          _connections: Array<{
+            connection: Connection;
+            createdAt: number;
+            lastUsedAt: number;
+            inUse: boolean;
+          }>;
+        }
+      )._connections;
+
+      const fakeConn = { isClosed: false } as unknown as Connection;
+      connections.push(
+        { connection: fakeConn, createdAt: Date.now(), lastUsedAt: Date.now(), inUse: true },
+        { connection: fakeConn, createdAt: Date.now(), lastUsedAt: Date.now(), inUse: false },
+        { connection: fakeConn, createdAt: Date.now(), lastUsedAt: Date.now(), inUse: true },
+        { connection: fakeConn, createdAt: Date.now(), lastUsedAt: Date.now(), inUse: false },
+        { connection: fakeConn, createdAt: Date.now(), lastUsedAt: Date.now(), inUse: false }
+      );
+
+      const stats = pool.stats;
+      expect(stats.total).toBe(5);
+      expect(stats.inUse).toBe(2);
+      expect(stats.available).toBe(3);
+      expect(stats.waiting).toBe(0);
+    });
+  });
+
   describe('AbortSignal listener cleanup', () => {
     it('should clean up abort listener on successful acquire', async () => {
       const config: PoolConfig = {

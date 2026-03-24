@@ -305,6 +305,165 @@ describe('Connection', () => {
     });
   });
 
+  describe('QUAL-T7: exec drains multi-page results', () => {
+    it('should drain remaining pages when exec receives non-final inline data', async () => {
+      // Queue SCHEMA response
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'id', type: 'INT64' }],
+          },
+        },
+      });
+
+      // Queue non-final inline DATA PAGE (page 1 of 2)
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [{ values: [{ intVal: { value: 1, kind: 1 } }] }],
+            final: false,
+            ordered: false,
+            orderKeys: [],
+          },
+        },
+      });
+
+      // Queue final DATA PAGE (page 2 of 2) - this should be drained by exec()
+      transport.queueProtoResponse({
+        pull: {
+          response: {
+            page: {
+              rows: [{ values: [{ intVal: { value: 2, kind: 1 } }] }],
+              final: true,
+              ordered: false,
+              orderKeys: [],
+            },
+          },
+        },
+      });
+
+      // exec() should drain all pages without error
+      await expect(connection.exec('CREATE (n:Test) RETURN n')).resolves.not.toThrow();
+
+      // Connection should be idle and ready for next query
+      expect(connection.state).toBe('idle');
+
+      // Verify next query works correctly (no corruption)
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'val', type: 'STRING' }],
+          },
+        },
+      });
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [{ values: [{ stringVal: { value: 'ok', kind: 1 } }] }],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
+        },
+      });
+
+      const rows = await connection.queryAll('RETURN "ok" AS val');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.['val']).toBe('ok');
+    });
+
+    it('should handle exec with final inline data (no drain needed)', async () => {
+      transport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [],
+          },
+        },
+      });
+
+      transport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
+        },
+      });
+
+      await expect(connection.exec('CREATE (n:Test)')).resolves.not.toThrow();
+      expect(connection.state).toBe('idle');
+    });
+  });
+
+  describe('QUAL-T4: configurable inline timeout', () => {
+    it('should use custom inlineTimeout from config', async () => {
+      const customTransport = new MockTransport();
+      customTransport.queueProtoResponse({
+        hello: {
+          success: true,
+          sessionId: 'inline-timeout-session',
+          errorMessage: '',
+          capabilities: [],
+        },
+      });
+
+      // Create connection with very short inline timeout
+      const customConnection = await Connection.connectWithTransport(
+        {
+          host: 'localhost',
+          port: 3141,
+          pageSize: 100,
+          transport: 'quic',
+          helloName: 'test',
+          helloVersion: '1.0.0',
+          conformance: 'min',
+          inlineTimeout: 50, // 50ms instead of default 5000ms
+        },
+        customTransport
+      );
+
+      // Queue SCHEMA response
+      customTransport.queueProtoResponse({
+        execute: {
+          schema: {
+            columns: [{ name: 'n', type: 'INT64' }],
+          },
+        },
+      });
+
+      // Don't queue inline data - the short timeout should fire quickly
+      // Then queue the PULL response that will be needed after timeout
+      const startTime = Date.now();
+
+      // Start query - inline timeout will fire at 50ms, then PULL will be sent
+      const queryPromise = connection.queryAll.call(customConnection, 'RETURN 1 AS n');
+
+      // Wait for inline timeout to fire (50ms), then queue PULL response
+      await new Promise((r) => setTimeout(r, 80));
+
+      customTransport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [{ values: [{ intVal: { value: 1, kind: 1 } }] }],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
+        },
+      });
+
+      const rows = await queryPromise;
+      const elapsed = Date.now() - startTime;
+
+      expect(rows).toHaveLength(1);
+      // The inline timeout should have been ~50ms, not 5000ms
+      // Allow generous margin but it should be well under the default 5s
+      expect(elapsed).toBeLessThan(3000);
+    });
+  });
+
   describe('ping', () => {
     it('should ping successfully', async () => {
       transport.queueProtoResponse({

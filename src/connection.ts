@@ -439,11 +439,17 @@ export class Connection {
       if (isSchemaResponse(execResp)) {
         this._columns = execResp.schema!.columns;
         const inlineResponse = await this._tryReceiveInline(signal);
-        if (inlineResponse?.execute && isErrorResponse(inlineResponse.execute)) {
-          throw protoErrorToDriverError(
-            inlineResponse.execute,
-            inlineResponse.execute.status?.statusClass
-          );
+        if (inlineResponse?.execute) {
+          if (isErrorResponse(inlineResponse.execute)) {
+            throw protoErrorToDriverError(
+              inlineResponse.execute,
+              inlineResponse.execute.status?.statusClass
+            );
+          }
+          // QUAL-T7: Drain remaining pages if the inline response is not final
+          if (isDataPageResponse(inlineResponse.execute) && !inlineResponse.execute.page!.final) {
+            await this._drainRemainingPages(signal);
+          }
         }
       }
     } finally {
@@ -500,7 +506,8 @@ export class Connection {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const inlineTimeoutMs = this._config.inlineTimeout ?? 5000;
+    const timeoutId = setTimeout(() => controller.abort(), inlineTimeoutMs);
 
     try {
       const response = await this._transport.receiveProto(controller.signal);
@@ -512,6 +519,38 @@ export class Connection {
       throw err;
     } finally {
       clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Drain remaining data pages until final=true (QUAL-T7).
+   * Used by statement execution to prevent leftover pages from corrupting subsequent queries.
+   */
+  private async _drainRemainingPages(signal?: AbortSignal): Promise<void> {
+    let done = false;
+    while (!done) {
+      this._requestId++;
+      const pageSize = this._config.pageSize;
+      const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
+      await this._sendWithTimeout(pullMsg, signal);
+
+      const response = await this._receiveWithTimeout(signal);
+      const pullExec = response.pull?.response ?? response.execute;
+
+      if (!pullExec) {
+        break;
+      }
+
+      if (isErrorResponse(pullExec)) {
+        throw protoErrorToDriverError(pullExec, pullExec.status?.statusClass);
+      }
+
+      if (isDataPageResponse(pullExec)) {
+        done = pullExec.page!.final;
+      } else {
+        // Non-data response (metrics, profile) means no more data
+        done = true;
+      }
     }
   }
 

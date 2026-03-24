@@ -108,6 +108,9 @@ export interface GeodeConfig {
   /** Maximum idle time in milliseconds (default: 30000) */
   maxIdleTime?: number;
 
+  /** Inline receive timeout in milliseconds (default: 5000) */
+  inlineTimeout?: number;
+
   // gRPC-specific options
   /** Enable TLS for gRPC (default: true) */
   tls?: boolean;

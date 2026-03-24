@@ -153,6 +153,10 @@ export class ConnectionPool {
     this._maintenanceInterval = setInterval(() => {
       this.maintenance();
     }, 10000);
+    // PERF-8: Allow process to exit cleanly even if pool is alive
+    if (this._maintenanceInterval.unref) {
+      this._maintenanceInterval.unref();
+    }
   }
 
   /**
@@ -187,12 +191,18 @@ export class ConnectionPool {
     inUse: number;
     waiting: number;
   } {
-    const available = this._connections.filter((c) => !c.inUse).length;
-    const inUse = this._connections.filter((c) => c.inUse).length;
+    // PERF-13: Single pass instead of two separate filter().length calls
+    let inUse = 0;
+    for (const c of this._connections) {
+      if (c.inUse) {
+        inUse++;
+      }
+    }
+    const total = this._connections.length;
 
     return {
-      total: this._connections.length,
-      available,
+      total,
+      available: total - inUse,
       inUse,
       waiting: this._waitQueue.length,
     };
