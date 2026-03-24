@@ -126,7 +126,7 @@ export class NodePatternBuilder {
     for (const key of Object.keys(properties)) {
       validatePropertyName(key);
     }
-    Object.assign(this._properties, properties);
+    this._properties = { ...this._properties, ...properties };
     return this;
   }
 
@@ -240,7 +240,7 @@ export class EdgePatternBuilder {
     for (const key of Object.keys(properties)) {
       validatePropertyName(key);
     }
-    Object.assign(this._properties, properties);
+    this._properties = { ...this._properties, ...properties };
     return this;
   }
 
@@ -538,7 +538,7 @@ export class PredicateBuilder {
     }
     this._predicates.push(expr);
     if (params) {
-      Object.assign(this._params, params);
+      this._params = { ...this._params, ...params };
     }
     return this;
   }
@@ -550,7 +550,7 @@ export class PredicateBuilder {
     const sub = builder.build();
     if (sub.predicate) {
       this._predicates.push(`(${sub.predicate})`);
-      Object.assign(this._params, sub.params);
+      this._params = { ...this._params, ...sub.params };
     }
     return this;
   }
@@ -567,7 +567,7 @@ export class PredicateBuilder {
       } else {
         this._predicates.push(sub.predicate);
       }
-      Object.assign(this._params, sub.params);
+      this._params = { ...this._params, ...sub.params };
     }
     return this;
   }
@@ -639,12 +639,12 @@ export class QueryBuilder {
     if (typeof predicate === 'string') {
       this._clauses.push(`WHERE ${predicate}`);
       if (params) {
-        Object.assign(this._params, params);
+        this._params = { ...this._params, ...params };
       }
     } else {
       const built = predicate.build();
       this._clauses.push(`WHERE ${built.predicate}`);
-      Object.assign(this._params, built.params);
+      this._params = { ...this._params, ...built.params };
     }
     return this;
   }
@@ -790,7 +790,7 @@ export class QueryBuilder {
     }
     this._clauses.push(clause);
     if (params) {
-      Object.assign(this._params, params);
+      this._params = { ...this._params, ...params };
     }
     return this;
   }
@@ -799,7 +799,7 @@ export class QueryBuilder {
    * Add a parameter.
    */
   param(name: string, value: unknown): this {
-    this._params[name] = value;
+    this._params = { ...this._params, [name]: value };
     return this;
   }
 
@@ -807,7 +807,7 @@ export class QueryBuilder {
    * Add multiple parameters.
    */
   params(params: QueryParams): this {
-    Object.assign(this._params, params);
+    this._params = { ...this._params, ...params };
     return this;
   }
 

@@ -184,10 +184,30 @@ export class GeodeClient {
 
   /**
    * Execute multiple statements.
+   *
+   * When a connection pool is available, all queries are executed within a
+   * single transaction to reduce round-trips (one BEGIN + N queries + COMMIT
+   * instead of N independent round-trips with connection acquire/release).
+   *
+   * For non-pooled (single connection) clients, queries are executed
+   * sequentially without an implicit transaction wrapper, preserving the
+   * caller's control over transaction boundaries.
    */
   async execBatch(queries: Array<{ query: string; params?: QueryParams }>): Promise<void> {
-    for (const q of queries) {
-      await this.exec(q.query, { params: q.params });
+    if (queries.length === 0) return;
+
+    if (this._pool) {
+      // Pipeline all queries in a single transaction to reduce round-trips
+      await this.withTransaction(async (tx) => {
+        for (const q of queries) {
+          await tx.exec(q.query, { params: q.params });
+        }
+      });
+    } else {
+      // Non-pooled: sequential execution without implicit transaction
+      for (const q of queries) {
+        await this.exec(q.query, { params: q.params });
+      }
     }
   }
 
