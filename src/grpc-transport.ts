@@ -113,6 +113,26 @@ export class GrpcTransport implements Transport {
       if (cfg.tls === false) {
         credentials = grpc.credentials.createInsecure();
       } else if (cfg.insecureSkipVerify) {
+        // Security safeguard: warn about insecure configuration
+        const isProduction =
+          process.env['NODE_ENV'] === 'production' || process.env['GEODE_ENV'] === 'production';
+        if (isProduction) {
+          // eslint-disable-next-line no-console -- Intentional security warning
+          console.warn(
+            'SECURITY WARNING: insecureSkipVerify is enabled in production environment. ' +
+              'This disables TLS certificate verification and exposes the connection to MITM attacks. ' +
+              'Set GEODE_ALLOW_INSECURE_PRODUCTION=true to override this warning.'
+          );
+          if (process.env['GEODE_ALLOW_INSECURE_PRODUCTION'] !== 'true') {
+            throw new TransportError({
+              operation: 'connect',
+              cause: new Error(
+                'insecureSkipVerify is not allowed in production. ' +
+                  'Configure proper TLS certificates or set GEODE_ALLOW_INSECURE_PRODUCTION=true to override.'
+              ),
+            });
+          }
+        }
         // Use TLS but skip certificate verification (for self-signed certs)
         // Load CA cert if provided, otherwise use null (skip CA validation)
         let rootCerts: Buffer | null = null;
@@ -135,8 +155,8 @@ export class GrpcTransport implements Transport {
 
       // Channel options
       const options: grpc.ChannelOptions = {
-        'grpc.max_receive_message_length': 100 * 1024 * 1024, // 100MB
-        'grpc.max_send_message_length': 100 * 1024 * 1024,
+        'grpc.max_receive_message_length': 16 * 1024 * 1024, // 16 MiB (matches QUIC transport)
+        'grpc.max_send_message_length': 16 * 1024 * 1024,
         'grpc.keepalive_time_ms': cfg.keepAliveInterval ?? 10000,
         'grpc.keepalive_timeout_ms': 5000,
         'grpc.keepalive_permit_without_calls': 1,

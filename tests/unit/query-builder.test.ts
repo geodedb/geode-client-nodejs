@@ -406,4 +406,43 @@ describe('query-builder', () => {
       expect(result).toContain("'c\\\\d'");
     });
   });
+
+  describe('SEC-P6-6: propsToGQL defense-in-depth key validation', () => {
+    it('should reject injection attempts via property keys at builder level', () => {
+      // The props() builder method already validates, this is the outer layer
+      expect(() => {
+        node().label('Person').props({ 'name) SET n.admin = true //': 'evil' });
+      }).toThrow(/security/i);
+    });
+
+    it('should reject injection keys in propsToGQL defense-in-depth layer', () => {
+      // SEC-P6-6: Test that propsToGQL() itself validates keys (defense-in-depth).
+      // If a NodePatternBuilder has its _properties set directly (bypassing
+      // the props() validation), the toGQL() method should still catch it
+      // because propsToGQL validates keys internally.
+      const builder = node().label('Person');
+      // Bypass the props() validation by directly setting _properties
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (builder as any)._properties = { 'name) SET n.admin = true //': 'evil' };
+
+      // Before the fix: toGQL() would succeed and include the injection payload
+      // After the fix: propsToGQL validates keys and throws SecurityError
+      expect(() => builder.toGQL()).toThrow(/security/i);
+    });
+
+    it('should reject SQL-like injection in propsToGQL defense-in-depth layer', () => {
+      const builder = node().label('Test');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (builder as any)._properties = { "'; DROP TABLE users --": 'value' };
+
+      expect(() => builder.toGQL()).toThrow(/security/i);
+    });
+
+    it('should allow valid property keys in propsToGQL', () => {
+      const n = node().label('Person').props({ valid_name: 'Alice', age: 30 });
+      const result = n.toGQL();
+      expect(result).toContain('valid_name');
+      expect(result).toContain('age');
+    });
+  });
 });

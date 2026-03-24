@@ -817,7 +817,13 @@ export class QueryBuilder {
 // Helper functions
 
 function propsToGQL(props: Record<string, unknown>): string {
-  const entries = Object.entries(props).map(([k, v]) => `${k}: ${valueToGQL(v)}`);
+  const entries = Object.entries(props).map(([k, v]) => {
+    // Defense-in-depth: validate property keys even though callers should
+    // already validate. This prevents injection if a raw pattern object
+    // bypasses builder-level validation.
+    validatePropertyName(k);
+    return `${k}: ${valueToGQL(v)}`;
+  });
   return `{${entries.join(', ')}}`;
 }
 
