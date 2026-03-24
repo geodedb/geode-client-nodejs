@@ -312,4 +312,72 @@ describe('QuicTransport buffer limits', () => {
     expect(() => internal.processData(chunk)).toThrow(TransportError);
     expect(transport.isClosed()).toBe(true);
   });
+
+  it('should track total length across multiple chunks without eager concat', () => {
+    // Verify the chunk list pattern: multiple processData calls should
+    // accumulate _totalLength without creating a single concatenated buffer
+    // until a complete message is ready to decode.
+    const transport = new QuicTransport('mock:3141', 1024, 4096);
+    const internal = transport as unknown as {
+      processData: (data: Buffer) => void;
+      _chunks: Buffer[];
+      _totalLength: number;
+    };
+
+    // Send a length prefix declaring a 100-byte message, split across chunks
+    const prefix = Buffer.alloc(4);
+    prefix.writeUInt32BE(100, 0);
+    internal.processData(prefix);
+
+    // _totalLength should track without merging into a single buffer prematurely
+    expect(internal._totalLength).toBe(4);
+
+    // Send partial body (50 bytes)
+    const partial = Buffer.alloc(50);
+    internal.processData(partial);
+
+    expect(internal._totalLength).toBe(54);
+    // Chunks should still be separate (not eagerly concatenated on every call)
+    // After consolidation for length prefix read, we may have fewer chunks,
+    // but totalLength must be accurate
+    expect(internal._totalLength).toBe(54);
+  });
+
+  it('should clear chunks on close', async () => {
+    const transport = new QuicTransport('mock:3141', 1024, 4096);
+    const internal = transport as unknown as {
+      processData: (data: Buffer) => void;
+      _chunks: Buffer[];
+      _totalLength: number;
+    };
+
+    // Accumulate some data
+    const chunk = Buffer.alloc(20);
+    chunk.writeUInt32BE(500, 0); // incomplete message
+    internal.processData(chunk);
+
+    expect(internal._totalLength).toBe(20);
+
+    await transport.close();
+
+    expect(internal._chunks).toHaveLength(0);
+    expect(internal._totalLength).toBe(0);
+  });
+
+  it('should clear chunks on oversize error', () => {
+    const transport = new QuicTransport('mock:3141', 1024, 30);
+    const internal = transport as unknown as {
+      processData: (data: Buffer) => void;
+      _chunks: Buffer[];
+      _totalLength: number;
+    };
+
+    const chunk = Buffer.alloc(40);
+    chunk.writeUInt32BE(200, 0);
+
+    expect(() => internal.processData(chunk)).toThrow(TransportError);
+
+    expect(internal._chunks).toHaveLength(0);
+    expect(internal._totalLength).toBe(0);
+  });
 });

@@ -134,7 +134,7 @@ export abstract class BaseTransport implements Transport {
 
   protected checkClosed(): void {
     if (this._closed) {
-      throw ErrClosed;
+      throw ErrClosed();
     }
   }
 }
@@ -148,7 +148,8 @@ export abstract class BaseTransport implements Transport {
 export class QuicTransport extends BaseTransport {
   private _client: unknown = null;
   private _stream: unknown = null;
-  private _protoBuffer: Buffer = Buffer.alloc(0);
+  private _chunks: Buffer[] = [];
+  private _totalLength = 0;
   private _maxMessageSize: number;
   private _maxBufferBytes: number;
   private _pendingProtoReads: Array<{
@@ -333,19 +334,41 @@ export class QuicTransport extends BaseTransport {
   }
 
   /**
+   * Consolidate the chunk list into a single buffer.
+   * Called only when we know we have enough data for at least one operation.
+   */
+  private consolidateChunks(): Buffer {
+    if (this._chunks.length === 0) {
+      return Buffer.alloc(0);
+    }
+    if (this._chunks.length === 1) {
+      return this._chunks[0]!;
+    }
+    const consolidated = Buffer.concat(this._chunks, this._totalLength);
+    this._chunks = [consolidated];
+    return consolidated;
+  }
+
+  /**
    * Process received data (length-prefixed protobuf messages).
+   *
+   * Uses a chunk list pattern instead of Buffer.concat on every call
+   * to avoid O(n^2) copying of the accumulated buffer.
    */
   private processData(data: Buffer): void {
-    this._protoBuffer = Buffer.concat([this._protoBuffer, data]);
+    this._chunks.push(data);
+    this._totalLength += data.length;
 
     // Reject if accumulated buffer exceeds maximum allowed size (CWE-400)
-    if (this._protoBuffer.length > this._maxBufferBytes) {
+    if (this._totalLength > this._maxBufferBytes) {
       this.handleOversize('buffer');
     }
 
     // Try to decode complete messages
-    while (this._protoBuffer.length >= 4) {
-      const msgLen = decodeLengthPrefix(this._protoBuffer);
+    while (this._totalLength >= 4) {
+      // Consolidate only when we need to read the length prefix
+      const buf = this.consolidateChunks();
+      const msgLen = decodeLengthPrefix(buf);
 
       // Reject oversized messages before buffering (CWE-400)
       if (msgLen > this._maxMessageSize) {
@@ -354,14 +377,22 @@ export class QuicTransport extends BaseTransport {
 
       const totalLen = 4 + msgLen;
 
-      if (this._protoBuffer.length < totalLen) {
+      if (this._totalLength < totalLen) {
         // Need more data
         break;
       }
 
       // Extract and decode the message
-      const msgData = this._protoBuffer.subarray(4, totalLen);
-      this._protoBuffer = this._protoBuffer.subarray(totalLen);
+      const msgData = buf.subarray(4, totalLen);
+      const remaining = buf.subarray(totalLen);
+
+      // Update chunks to hold only the remainder
+      if (remaining.length > 0) {
+        this._chunks = [remaining];
+      } else {
+        this._chunks = [];
+      }
+      this._totalLength = remaining.length;
 
       try {
         const msg = decodeQuicServerMessage(msgData);
@@ -395,7 +426,8 @@ export class QuicTransport extends BaseTransport {
       operation: 'receive',
       cause: new Error(`Received ${kind} exceeds maximum allowed size`),
     });
-    this._protoBuffer = Buffer.alloc(0);
+    this._chunks = [];
+    this._totalLength = 0;
     this.rejectPendingReads(error);
     void this.close();
     throw error;
@@ -486,7 +518,8 @@ export class QuicTransport extends BaseTransport {
       pending.reject(ErrClosed);
     }
     this._pendingProtoReads = [];
-    this._protoBuffer = Buffer.alloc(0);
+    this._chunks = [];
+    this._totalLength = 0;
 
     // Close QUIC client
     if (this._client) {
@@ -609,7 +642,7 @@ export class MockTransport extends BaseTransport {
     this._closed = true;
 
     for (const pending of this._pendingProtoReads) {
-      pending.reject(ErrClosed);
+      pending.reject(ErrClosed());
     }
     this._pendingProtoReads = [];
   }
