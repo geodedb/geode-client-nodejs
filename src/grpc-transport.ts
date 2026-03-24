@@ -353,28 +353,6 @@ export class GrpcTransport implements Transport {
   }
 
   /**
-   * Legacy JSON send (not supported for gRPC).
-   */
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async send(_msg: Record<string, unknown>, _signal?: AbortSignal): Promise<void> {
-    throw new TransportError({
-      operation: 'send',
-      cause: new Error('JSON mode not supported for gRPC transport'),
-    });
-  }
-
-  /**
-   * Legacy JSON receive (not supported for gRPC).
-   */
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async receive(_signal?: AbortSignal): Promise<Buffer> {
-    throw new TransportError({
-      operation: 'receive',
-      cause: new Error('JSON mode not supported for gRPC transport'),
-    });
-  }
-
-  /**
    * Close the transport.
    */
   // eslint-disable-next-line @typescript-eslint/require-await

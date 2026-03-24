@@ -477,12 +477,14 @@ export class ConnectionPool {
 
     const now = Date.now();
 
-    // Remove idle connections exceeding minimum
+    // Remove idle connections that have exceeded the idle timeout,
+    // but only if the total active (non-closed) count exceeds minConnections.
     const idleConnections = this._connections
       .filter((c) => !c.inUse && now - c.lastUsedAt > this._idleTimeout)
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt);
 
-    const toRemove = Math.max(0, idleConnections.length - this._minConnections);
+    const activeCount = this._connections.filter((c) => !c.connection.isClosed).length;
+    const toRemove = Math.max(0, activeCount - this._minConnections);
     for (let i = 0; i < toRemove; i++) {
       const conn = idleConnections[i];
       if (conn) {

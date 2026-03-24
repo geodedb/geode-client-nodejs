@@ -661,6 +661,7 @@ export async function createTransport(cfg: GeodeConfig): Promise<Transport> {
   return QuicTransport.connect(cfg);
 }
 
-// Legacy export aliases
-export { QuicTransport as MatrixQuicTransport };
+/**
+ * @deprecated Use {@link QuicTransport} instead. Will be removed in a future release.
+ */
 export { QuicTransport as QuicheTransport };

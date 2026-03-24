@@ -448,7 +448,8 @@ export class Connection {
   }
 
   /**
-   * Fetch the next page of results (internal).
+   * Fetch the next page of results.
+   * @internal Called by {@link QueryResult} to paginate through server data.
    */
   async _fetchNextPage(
     pageSize: number,
@@ -545,7 +546,8 @@ export class Connection {
   }
 
   /**
-   * Release active result (internal).
+   * Release the active result, returning the connection to idle state.
+   * @internal Called by {@link QueryResult} when iteration completes or is closed.
    */
   _releaseResult(result: QueryResult): void {
     if (this._activeResult === result) {
@@ -587,7 +589,8 @@ export class Connection {
   }
 
   /**
-   * Commit the current transaction (internal).
+   * Commit the current transaction.
+   * @internal Called by {@link Transaction} on commit.
    */
   async _commit(signal?: AbortSignal): Promise<void> {
     const msg = buildCommitRequest(this._sessionId);
@@ -616,7 +619,8 @@ export class Connection {
   }
 
   /**
-   * Rollback the current transaction (internal).
+   * Rollback the current transaction.
+   * @internal Called by {@link Transaction} on rollback.
    */
   async _rollback(signal?: AbortSignal): Promise<void> {
     const msg = buildRollbackRequest(this._sessionId);
@@ -636,7 +640,8 @@ export class Connection {
   }
 
   /**
-   * Create a savepoint (internal).
+   * Create a named savepoint inside the current transaction.
+   * @internal Called by {@link Transaction} to create savepoints.
    */
   async _savepoint(name: string, signal?: AbortSignal): Promise<void> {
     validateSavepointName(name);
@@ -664,7 +669,8 @@ export class Connection {
   }
 
   /**
-   * Rollback to a savepoint (internal).
+   * Rollback to a previously created savepoint.
+   * @internal Called by {@link Transaction} to rollback to a savepoint.
    */
   async _rollbackTo(name: string, signal?: AbortSignal): Promise<void> {
     validateSavepointName(name);

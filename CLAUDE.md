@@ -148,15 +148,21 @@ CLIENT                          SERVER
 
 ```
 idle ──────→ executing ──────→ idle
-  │              │
-  │              ↓
-  └──→ fetching ───────→ idle
+  │                               │
+  ├──→ fetching ──────────────────┘
   │
-  └──→ in_transaction ──→ idle
-                  │
-                  ↓
-              closed/error
+  ├──→ in_transaction ────────────┘
+  │
+  └──→ closed
 ```
+
+States (from `ConnectionState` in `src/errors.ts`):
+- **idle** -- ready for queries or transactions
+- **executing** -- running a statement (no results expected)
+- **fetching** -- running a query with result streaming
+- **in_transaction** -- inside a BEGIN..COMMIT/ROLLBACK block
+- **closed** -- connection permanently shut down
+- **error** -- defined in the type but never assigned by `Connection`; reserved for future use
 
 ### Error Handling
 
