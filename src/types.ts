@@ -509,8 +509,18 @@ export class GQLValue {
         return this._decimalValue?.toString();
       case 'ARRAY':
         return this._arrayValue.map((v) => v.toJS());
-      case 'OBJECT':
-        return Object.fromEntries([...this._objectValue.entries()].map(([k, v]) => [k, v.toJS()]));
+      case 'OBJECT': {
+        const obj = Object.create(null) as Record<string, unknown>;
+        for (const [k, v] of this._objectValue.entries()) {
+          if (!isSafeObjectKey(k)) {
+            throw new Error(
+              `Object contains dangerous key that could cause prototype pollution: keys like '__proto__', 'constructor', or 'prototype' are not allowed`
+            );
+          }
+          obj[k] = v.toJS();
+        }
+        return obj;
+      }
       case 'BYTEA':
         return this._bytesValue;
       case 'DATE':

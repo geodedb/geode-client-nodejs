@@ -230,6 +230,28 @@ describe('types', () => {
         });
         expect(obj.toJS()).toEqual({ a: 1, b: 'two' });
       });
+
+      it('should reject __proto__ key in OBJECT values to prevent prototype pollution', () => {
+        // Must use Map directly because { __proto__: ... } sets prototype, not an own property
+        const map = new Map<string, GQLValue>([['__proto__', GQLValue.string('malicious')]]);
+        const obj = GQLValue.object(map);
+        expect(() => obj.toJS()).toThrow(/prototype pollution/i);
+      });
+
+      it('should reject constructor key in OBJECT values to prevent prototype pollution', () => {
+        const map = new Map<string, GQLValue>([['constructor', GQLValue.string('malicious')]]);
+        const obj = GQLValue.object(map);
+        expect(() => obj.toJS()).toThrow(/prototype pollution/i);
+      });
+
+      it('should return prototype-free object from toJS for OBJECT values', () => {
+        const obj = GQLValue.object({
+          safe: GQLValue.int(1),
+        });
+        const result = obj.toJS() as Record<string, unknown>;
+        expect(Object.getPrototypeOf(result)).toBeNull();
+        expect(result['safe']).toBe(1);
+      });
     });
   });
 

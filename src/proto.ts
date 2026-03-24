@@ -9,6 +9,7 @@
 import protobuf from 'protobufjs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isSafeObjectKey } from './types.js';
 
 // Get the directory of this module for proto file resolution
 const __filename = fileURLToPath(import.meta.url);
@@ -447,8 +448,13 @@ export function protoValueToJS(val: ProtoValue): unknown {
   }
 
   if (val.mapVal !== undefined) {
-    const obj: Record<string, unknown> = {};
+    const obj = Object.create(null) as Record<string, unknown>;
     for (const entry of val.mapVal.entries) {
+      if (!isSafeObjectKey(entry.key)) {
+        throw new Error(
+          `Map contains dangerous key that could cause prototype pollution: keys like '__proto__', 'constructor', or 'prototype' are not allowed`
+        );
+      }
       obj[entry.key] = protoValueToJS(entry.value);
     }
     return obj;
@@ -456,8 +462,13 @@ export function protoValueToJS(val: ProtoValue): unknown {
 
   if (val.nodeVal !== undefined) {
     const node = val.nodeVal;
-    const props: Record<string, unknown> = {};
+    const props = Object.create(null) as Record<string, unknown>;
     for (const entry of node.properties) {
+      if (!isSafeObjectKey(entry.key)) {
+        throw new Error(
+          `Node property contains dangerous key that could cause prototype pollution: keys like '__proto__', 'constructor', or 'prototype' are not allowed`
+        );
+      }
       props[entry.key] = protoValueToJS(entry.value);
     }
     return {
@@ -469,8 +480,13 @@ export function protoValueToJS(val: ProtoValue): unknown {
 
   if (val.edgeVal !== undefined) {
     const edge = val.edgeVal;
-    const props: Record<string, unknown> = {};
+    const props = Object.create(null) as Record<string, unknown>;
     for (const entry of edge.properties) {
+      if (!isSafeObjectKey(entry.key)) {
+        throw new Error(
+          `Edge property contains dangerous key that could cause prototype pollution: keys like '__proto__', 'constructor', or 'prototype' are not allowed`
+        );
+      }
       props[entry.key] = protoValueToJS(entry.value);
     }
     return {
@@ -694,10 +710,15 @@ export function buildRollbackToRequest(name: string, sessionId: string): QuicCli
  * Convert a DataPage row to a record of column name -> value.
  */
 export function rowToRecord(row: Row, columns: ColumnDefinition[]): Record<string, unknown> {
-  const record: Record<string, unknown> = {};
+  const record = Object.create(null) as Record<string, unknown>;
   for (let i = 0; i < columns.length && i < row.values.length; i++) {
     const col = columns[i]!;
     const val = row.values[i]!;
+    if (!isSafeObjectKey(col.name)) {
+      throw new Error(
+        `Row contains dangerous column name that could cause prototype pollution: column names like '__proto__', 'constructor', or 'prototype' are not allowed`
+      );
+    }
     record[col.name] = protoValueToJS(val);
   }
   return record;

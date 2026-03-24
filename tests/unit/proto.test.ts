@@ -376,4 +376,123 @@ describe('proto', () => {
       expect(mockPingResponse.ping?.ok).toBe(true);
     });
   });
+
+  describe('prototype pollution protection', () => {
+    describe('rowToRecord', () => {
+      it('should reject __proto__ column name to prevent prototype pollution', () => {
+        const columns = [
+          { name: '__proto__', type: 'STRING' },
+          { name: 'name', type: 'STRING' },
+        ];
+
+        const row = {
+          values: [
+            { stringVal: { value: 'malicious', kind: 1 } },
+            { stringVal: { value: 'Alice', kind: 1 } },
+          ],
+        };
+
+        expect(() => rowToRecord(row, columns)).toThrow(/prototype pollution/i);
+      });
+
+      it('should reject constructor column name to prevent prototype pollution', () => {
+        const columns = [{ name: 'constructor', type: 'STRING' }];
+        const row = { values: [{ stringVal: { value: 'malicious', kind: 1 } }] };
+
+        expect(() => rowToRecord(row, columns)).toThrow(/prototype pollution/i);
+      });
+
+      it('should return prototype-free object from rowToRecord', () => {
+        const columns = [{ name: 'id', type: 'INT' }];
+        const row = { values: [{ intVal: { value: 1, kind: 1 } }] };
+
+        const record = rowToRecord(row, columns);
+        expect(Object.getPrototypeOf(record)).toBeNull();
+      });
+    });
+
+    describe('protoValueToJS', () => {
+      it('should return prototype-free object for map values', () => {
+        const mapVal: ProtoValue = {
+          mapVal: {
+            entries: [{ key: 'name', value: { stringVal: { value: 'test', kind: 1 } } }],
+          },
+        };
+
+        const result = protoValueToJS(mapVal) as Record<string, unknown>;
+        expect(Object.getPrototypeOf(result)).toBeNull();
+        expect(result['name']).toBe('test');
+      });
+
+      it('should reject __proto__ key in map values', () => {
+        const mapVal: ProtoValue = {
+          mapVal: {
+            entries: [{ key: '__proto__', value: { stringVal: { value: 'malicious', kind: 1 } } }],
+          },
+        };
+
+        expect(() => protoValueToJS(mapVal)).toThrow(/prototype pollution/i);
+      });
+
+      it('should return prototype-free properties for node values', () => {
+        const nodeVal: ProtoValue = {
+          nodeVal: {
+            id: 1n,
+            labels: ['Person'],
+            properties: [{ key: 'name', value: { stringVal: { value: 'Alice', kind: 1 } } }],
+          },
+        };
+
+        const result = protoValueToJS(nodeVal) as Record<string, unknown>;
+        const props = result['properties'] as Record<string, unknown>;
+        expect(Object.getPrototypeOf(props)).toBeNull();
+      });
+
+      it('should reject __proto__ key in node properties', () => {
+        const nodeVal: ProtoValue = {
+          nodeVal: {
+            id: 1n,
+            labels: ['Person'],
+            properties: [
+              { key: '__proto__', value: { stringVal: { value: 'malicious', kind: 1 } } },
+            ],
+          },
+        };
+
+        expect(() => protoValueToJS(nodeVal)).toThrow(/prototype pollution/i);
+      });
+
+      it('should return prototype-free properties for edge values', () => {
+        const edgeVal: ProtoValue = {
+          edgeVal: {
+            id: 1n,
+            fromId: 1n,
+            toId: 2n,
+            label: 'KNOWS',
+            properties: [{ key: 'since', value: { intVal: { value: 2020, kind: 1 } } }],
+          },
+        };
+
+        const result = protoValueToJS(edgeVal) as Record<string, unknown>;
+        const props = result['properties'] as Record<string, unknown>;
+        expect(Object.getPrototypeOf(props)).toBeNull();
+      });
+
+      it('should reject __proto__ key in edge properties', () => {
+        const edgeVal: ProtoValue = {
+          edgeVal: {
+            id: 1n,
+            fromId: 1n,
+            toId: 2n,
+            label: 'KNOWS',
+            properties: [
+              { key: '__proto__', value: { stringVal: { value: 'malicious', kind: 1 } } },
+            ],
+          },
+        };
+
+        expect(() => protoValueToJS(edgeVal)).toThrow(/prototype pollution/i);
+      });
+    });
+  });
 });
