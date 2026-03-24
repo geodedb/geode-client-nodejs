@@ -171,19 +171,40 @@ export const DEFAULT_PASSWORD_POLICY: Required<PasswordPolicy> = {
 export class AuthClient {
   private _conn: Connection;
   private _passwordPolicy: Required<PasswordPolicy>;
+  private _onClose?: () => void;
+  private _closed = false;
 
   /**
    * Create a new auth client.
    *
    * @param conn - Connection to use
    * @param passwordPolicy - Optional password policy configuration
+   * @param onClose - Optional callback invoked when close() is called (e.g., to release a pooled connection)
    */
-  constructor(conn: Connection, passwordPolicy?: PasswordPolicy) {
+  constructor(conn: Connection, passwordPolicy?: PasswordPolicy, onClose?: () => void) {
     this._conn = conn;
     this._passwordPolicy = {
       ...DEFAULT_PASSWORD_POLICY,
       ...passwordPolicy,
     };
+    this._onClose = onClose;
+  }
+
+  /**
+   * Close the auth client and release the underlying connection.
+   *
+   * If a release callback was provided (e.g., to return a pooled connection),
+   * it is invoked exactly once on the first call to close().
+   */
+  close(): void {
+    if (this._closed) {
+      return;
+    }
+    this._closed = true;
+    if (this._onClose) {
+      this._onClose();
+      this._onClose = undefined;
+    }
   }
 
   /**

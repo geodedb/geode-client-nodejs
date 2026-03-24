@@ -44,18 +44,24 @@ export class PreparedStatement {
   private _query: string;
   private _parameters: ParameterInfo[];
   private _closed = false;
+  private _onClose?: () => void;
 
   /**
    * Create a new prepared statement.
    *
+   * @param conn - Connection to use for execution
+   * @param query - Query text with parameters
+   * @param onClose - Optional callback invoked when close() is called (e.g., to release a pooled connection)
+   *
    * @internal Use Connection.prepare() instead.
    */
-  constructor(conn: Connection, query: string) {
+  constructor(conn: Connection, query: string, onClose?: () => void) {
     validateQuery(query);
 
     this._conn = conn;
     this._query = query;
     this._parameters = extractParameters(query);
+    this._onClose = onClose;
   }
 
   /**
@@ -165,9 +171,18 @@ export class PreparedStatement {
    * Close the prepared statement.
    *
    * After closing, the statement cannot be executed.
+   * If a release callback was provided (e.g., to return a pooled connection),
+   * it is invoked exactly once on the first call to close().
    */
   close(): void {
+    if (this._closed) {
+      return;
+    }
     this._closed = true;
+    if (this._onClose) {
+      this._onClose();
+      this._onClose = undefined;
+    }
   }
 
   /**

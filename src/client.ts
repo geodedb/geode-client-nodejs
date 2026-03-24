@@ -47,12 +47,9 @@ export class GeodeClient {
    * Create a new client from a DSN string.
    */
   static async connect(dsn: string, options?: ClientOptions): Promise<GeodeClient> {
-    const config = parseDSN(dsn);
-
-    // Apply additional options
-    if (options) {
-      Object.assign(config, options);
-    }
+    // Use spread to avoid mutating the config returned by parseDSN
+    const baseConfig = parseDSN(dsn);
+    const config = options ? { ...baseConfig, ...options } : baseConfig;
 
     const usePool = options?.pooling ?? true;
     const client = new GeodeClient(config);
@@ -498,11 +495,19 @@ export class GeodeClient {
    * ```
    */
   async prepare(query: string): Promise<PreparedStatement> {
+    const { PreparedStatement } = await import('./prepared.js');
     const conn = await this.getConnection();
     try {
-      return conn.prepare(query);
-    } finally {
+      // Pass a release callback so the connection is returned to the pool
+      // when the PreparedStatement is closed, not immediately.
+      const stmt = new PreparedStatement(conn, query, () => {
+        void this.releaseConnection(conn);
+      });
+      return stmt;
+    } catch (err) {
+      // Only release immediately if statement creation itself fails
       await this.releaseConnection(conn);
+      throw err;
     }
   }
 
@@ -590,7 +595,9 @@ export class GeodeClient {
   async auth(): Promise<AuthClient> {
     const { AuthClient } = await import('./auth.js');
     const conn = await this.getConnection();
-    return new AuthClient(conn);
+    return new AuthClient(conn, undefined, () => {
+      void this.releaseConnection(conn);
+    });
   }
 }
 
