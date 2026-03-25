@@ -227,12 +227,7 @@ export class AuthClient {
 
   // User Management
 
-  /**
-   * Create a new user.
-   *
-   * @param username - Username for the new user
-   * @param options - User creation options
-   */
+  /** Create a new user. */
   async createUser(username: string, options: CreateUserOptions): Promise<void> {
     validateUsername(username);
     this.validatePassword(options.password);
@@ -263,11 +258,7 @@ export class AuthClient {
     });
   }
 
-  /**
-   * Delete a user.
-   *
-   * @param username - Username to delete
-   */
+  /** Delete a user. */
   async deleteUser(username: string): Promise<void> {
     validateUsername(username);
 
@@ -276,12 +267,7 @@ export class AuthClient {
     });
   }
 
-  /**
-   * Get user information.
-   *
-   * @param username - Username to look up
-   * @returns User information or null if not found
-   */
+  /** Get user information, or null if not found. */
   async getUser(username: string): Promise<User | null> {
     validateUsername(username);
 
@@ -305,11 +291,7 @@ export class AuthClient {
     };
   }
 
-  /**
-   * List all users.
-   *
-   * @returns Array of users
-   */
+  /** List all users. */
   async listUsers(): Promise<User[]> {
     const result = await this._conn.queryAll('SHOW USERS');
 
@@ -322,12 +304,7 @@ export class AuthClient {
     }));
   }
 
-  /**
-   * Change a user's password.
-   *
-   * @param username - Username
-   * @param newPassword - New password
-   */
+  /** Change a user's password. */
   async changePassword(username: string, newPassword: string): Promise<void> {
     validateUsername(username);
     this.validatePassword(newPassword);
@@ -337,11 +314,7 @@ export class AuthClient {
     });
   }
 
-  /**
-   * Activate a user.
-   *
-   * @param username - Username to activate
-   */
+  /** Activate a user. */
   async activateUser(username: string): Promise<void> {
     validateUsername(username);
 
@@ -350,11 +323,7 @@ export class AuthClient {
     });
   }
 
-  /**
-   * Deactivate a user.
-   *
-   * @param username - Username to deactivate
-   */
+  /** Deactivate a user. */
   async deactivateUser(username: string): Promise<void> {
     validateUsername(username);
 
@@ -365,12 +334,7 @@ export class AuthClient {
 
   // Role Management
 
-  /**
-   * Create a new role.
-   *
-   * @param name - Role name
-   * @param options - Role creation options
-   */
+  /** Create a new role. */
   async createRole(name: string, options?: CreateRoleOptions): Promise<void> {
     validateRoleName(name);
 
@@ -394,11 +358,7 @@ export class AuthClient {
     }
   }
 
-  /**
-   * Delete a role.
-   *
-   * @param name - Role name to delete
-   */
+  /** Delete a role. */
   async deleteRole(name: string): Promise<void> {
     validateRoleName(name);
 
@@ -407,12 +367,7 @@ export class AuthClient {
     });
   }
 
-  /**
-   * Get role information.
-   *
-   * @param name - Role name
-   * @returns Role information or null if not found
-   */
+  /** Get role information, or null if not found. */
   async getRole(name: string): Promise<Role | null> {
     validateRoleName(name);
 
@@ -430,11 +385,7 @@ export class AuthClient {
     };
   }
 
-  /**
-   * List all roles.
-   *
-   * @returns Array of roles
-   */
+  /** List all roles. */
   async listRoles(): Promise<Role[]> {
     const result = await this._conn.queryAll('SHOW ROLES');
 
@@ -446,12 +397,7 @@ export class AuthClient {
     }));
   }
 
-  /**
-   * Assign a role to a user.
-   *
-   * @param username - Username
-   * @param roleName - Role to assign
-   */
+  /** Assign a role to a user. */
   async assignRole(username: string, roleName: string): Promise<void> {
     validateUsername(username);
     validateRoleName(roleName);
@@ -461,12 +407,7 @@ export class AuthClient {
     });
   }
 
-  /**
-   * Revoke a role from a user.
-   *
-   * @param username - Username
-   * @param roleName - Role to revoke
-   */
+  /** Revoke a role from a user. */
   async revokeRole(username: string, roleName: string): Promise<void> {
     validateUsername(username);
     validateRoleName(roleName);
@@ -476,12 +417,7 @@ export class AuthClient {
     });
   }
 
-  /**
-   * Grant a permission to a role.
-   *
-   * @param roleName - Role name
-   * @param permission - Permission to grant
-   */
+  /** Grant a permission to a role. */
   async grantPermission(roleName: string, permission: Permission): Promise<void> {
     validateRoleName(roleName);
 
@@ -504,12 +440,7 @@ export class AuthClient {
     });
   }
 
-  /**
-   * Revoke a permission from a role.
-   *
-   * @param roleName - Role name
-   * @param permission - Permission to revoke
-   */
+  /** Revoke a permission from a role. */
   async revokePermission(roleName: string, permission: Permission): Promise<void> {
     validateRoleName(roleName);
 

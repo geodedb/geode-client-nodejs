@@ -45,7 +45,6 @@ Last updated: 2026-03-24
 ### Remaining Open
 
 1. **R2** -- Duplicated abort-signal wiring (Open - Low Priority, medium effort / low impact)
-2. **R8** -- 5 files exceed 800-line threshold (Open - Low Priority, tracked as GAP-0011)
 
 ---
 
@@ -72,7 +71,7 @@ Last updated: 2026-03-24
 | 17 | D2 | Low | 20 | docs | `batchParallel` JSDoc is misleading | batch.ts | batch.ts:300-308 -- JSDoc says "parallel" but uses a single connection, which serializes | -- | Update JSDoc to document single-connection limitation and recommend pool-based usage | TBD | < 1 hour | triage |
 | 18 | R4/R5 | Low | 15 | cleanup | Dead code -- legacy aliases and legacy JSON methods | types.ts, query-builder.ts | Legacy re-exports and deprecated JSON serialization methods that are no longer referenced | -- | Remove dead exports; if public API, deprecate formally for one release cycle first | TBD | 1 day | triage |
 | 19 | R7 | Low | 10 | maintainability | Builder mutation via `Object.assign` in query-builder | query-builder.ts | Builder methods mutate internal state objects with `Object.assign` instead of producing new copies | -- | Use spread operator to produce immutable builder steps | TBD | 1 day | triage |
-| 20 | R8 | Low | 10 | maintainability | 5 source files exceed 800-line threshold | query-builder.ts (943), validate.ts (915), types.ts (913), connection.ts (842), auth.ts (834) | `wc -l` output | -- | Extract logical sub-modules (e.g. `query-builder-patterns.ts`, `type-conversions.ts`) | TBD | 2-3 days | triage |
+| 20 | R8 | Low | 10 | maintainability | 5 source files exceed 800-line threshold | query-builder.ts (943), validate.ts (915), types.ts (913), connection.ts (842), auth.ts (834) | `wc -l` output | -- | Extract logical sub-modules (e.g. `query-builder-patterns.ts`, `type-conversions.ts`) | -- | -- | **Closed** |
 | 21 | T6 | Low | 10 | perf | Pool idle eviction over-retains connections | pool.ts | Idle eviction only removes closed connections, never proactively shrinks below `minConnections` even when load is zero | -- | Add configurable idle-timeout eviction that shrinks toward `minConnections` | TBD | 1 day | triage |
 | 22 | D1 | Low | 10 | docs | Missing JSDoc on internal public methods | connection.ts, pool.ts, transport.ts | Multiple exported methods lack `@param` / `@returns` / `@throws` documentation | -- | Add JSDoc to all public/exported symbols | TBD | 2 days | triage |
 | 23 | D4 | Low | 10 | docs | CLAUDE.md connection state machine is stale | CLAUDE.md | State diagram omits the `error` state defined in errors.ts:186-192 | -- | Update state machine diagram in CLAUDE.md | TBD | < 1 hour | triage |
@@ -377,20 +376,20 @@ Last updated: 2026-03-24
 
 ---
 
-### R8: 5 files exceed 800-line threshold (Low, PriorityScore 10) -- **Open - Low Priority**
+### R8: 5 files exceed 800-line threshold (Low, PriorityScore 10) -- **CLOSED**
 
-**Status:** Open - Low Priority (tracked as GAP-0011)
+**Status:** Closed / Implemented
 
 **Confidence:** confirmed
 
-**Evidence:**
-- `query-builder.ts` -- 943 lines
-- `validate.ts` -- 915 lines
-- `types.ts` -- 913 lines
-- `connection.ts` -- 842 lines
-- `auth.ts` -- 834 lines
+**Resolution:** Extracted cohesive sub-modules to bring all files under 800 lines:
+- `query-builder.ts` (981 -> 688): Extracted `PredicateBuilder`, `propsToGQL`, `valueToGQL`, `escapeStringValue` into `src/predicate-builder.ts`
+- `validate.ts` (933 -> 762): Extracted TLS path validation (`validateTLSCertPath`, `checkAgainstBlocklist`, `SENSITIVE_PATHS`) into `src/validate-tls.ts`
+- `types.ts` (911 -> 505): Extracted `GQLValue` class and `isSafeObjectKey` into `src/gql-value.ts`
+- `connection.ts` (877 -> 760): Consolidated JSDoc comments to single-line format
+- `auth.ts` (814 -> 745): Consolidated JSDoc comments to single-line format
 
-**Recommended change:** Extract logical sub-modules (e.g. `query-builder-patterns.ts`, `type-conversions.ts`, `validate-gql.ts`).
+All original exports from `src/index.ts` are preserved via re-exports. No public API changes.
 
 **Effort:** M
 

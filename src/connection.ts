@@ -66,9 +66,7 @@ export interface QueryOptions {
   pageSize?: number;
 }
 
-/**
- * Convert a protobuf ExecutionResponse error to a DriverError.
- */
+/** Convert a protobuf ExecutionResponse error to a DriverError. */
 function protoErrorToDriverError(response: ExecutionResponse, statusClass?: string): DriverError {
   const err = response.error;
   return new DriverError({
@@ -82,30 +80,18 @@ function protoErrorToDriverError(response: ExecutionResponse, statusClass?: stri
   });
 }
 
-/**
- * Check if an ExecutionResponse is an error.
- */
 function isErrorResponse(response: ExecutionResponse): boolean {
   return response.error !== undefined;
 }
 
-/**
- * Check if an ExecutionResponse contains a schema.
- */
 function isSchemaResponse(response: ExecutionResponse): boolean {
   return response.schema !== undefined;
 }
 
-/**
- * Check if an ExecutionResponse contains a data page.
- */
 function isDataPageResponse(response: ExecutionResponse): boolean {
   return response.page !== undefined;
 }
 
-/**
- * Convert protobuf columns to ColumnInfo array.
- */
 function columnsToColumnInfo(columns: ColumnDefinition[]): ColumnInfo[] {
   return columns.map((col) => ({
     name: col.name,
@@ -114,9 +100,6 @@ function columnsToColumnInfo(columns: ColumnDefinition[]): ColumnInfo[] {
   }));
 }
 
-/**
- * Convert a DataPage to row records.
- */
 function dataPageToRows(page: DataPage, columns: ColumnDefinition[]): Record<string, unknown>[] {
   return page.rows.map((row) => rowToRecord(row, columns));
 }
@@ -169,44 +152,32 @@ export class Connection {
     return conn;
   }
 
-  /**
-   * Get connection configuration.
-   */
+  /** Get connection configuration. */
   get config(): Readonly<GeodeConfig> {
     return this._config;
   }
 
-  /**
-   * Get current connection state.
-   */
+  /** Get current connection state. */
   get state(): ConnectionState {
     return this._state;
   }
 
-  /**
-   * Check if connection is in a transaction.
-   */
+  /** Check if connection is in a transaction. */
   get inTransaction(): boolean {
     return this._inTransaction;
   }
 
-  /**
-   * Check if connection is closed.
-   */
+  /** Check if connection is closed. */
   get isClosed(): boolean {
     return this._state === 'closed' || this._transport.isClosed();
   }
 
-  /**
-   * Get session ID.
-   */
+  /** Get session ID. */
   get sessionId(): string {
     return this._sessionId;
   }
 
-  /**
-   * Perform the HELLO handshake.
-   */
+  /** Perform the HELLO handshake. */
   private async hello(): Promise<void> {
     const msg = buildHelloRequest(
       this._config.username ?? '',
@@ -244,9 +215,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Execute a query that returns rows.
-   */
+  /** Execute a query that returns rows. */
   async query(query: string, options?: QueryOptions): Promise<QueryResult> {
     this.checkState('query');
 
@@ -375,9 +344,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Execute a query and return all rows as an array.
-   */
+  /** Execute a query and return all rows as an array. */
   async queryAll(query: string, options?: QueryOptions): Promise<Record<string, unknown>[]> {
     const result = await this.query(query, options);
     // Fast path: collect raw records directly from the buffer
@@ -386,9 +353,7 @@ export class Connection {
     return result._collectRawRecords();
   }
 
-  /**
-   * Execute a query that doesn't return rows.
-   */
+  /** Execute a query that doesn't return rows. */
   async exec(query: string, options?: QueryOptions): Promise<void> {
     this.checkState('exec');
 
@@ -448,10 +413,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Fetch the next page of results.
-   * @internal Called by {@link QueryResult} to paginate through server data.
-   */
+  /** @internal Fetch the next page of results. Called by QueryResult. */
   async _fetchNextPage(
     pageSize: number,
     signal?: AbortSignal
@@ -489,9 +451,7 @@ export class Connection {
     return { rows: [], final: true };
   }
 
-  /**
-   * Try to receive an inline response with short timeout.
-   */
+  /** Try to receive an inline response with short timeout. */
   private async _tryReceiveInline(signal?: AbortSignal): Promise<QuicServerMessage | null> {
     if (signal?.aborted) {
       return null;
@@ -512,10 +472,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Drain remaining data pages until final=true (QUAL-T7).
-   * Used by statement execution to prevent leftover pages from corrupting subsequent queries.
-   */
+  /** Drain remaining data pages until final=true to prevent query corruption (QUAL-T7). */
   private async _drainRemainingPages(signal?: AbortSignal): Promise<void> {
     let done = false;
     while (!done) {
@@ -544,10 +501,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Release the active result, returning the connection to idle state.
-   * @internal Called by {@link QueryResult} when iteration completes or is closed.
-   */
+  /** @internal Release the active result, returning the connection to idle. */
   _releaseResult(result: QueryResult): void {
     if (this._activeResult === result) {
       this._activeResult = null;
@@ -555,9 +509,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Begin a transaction.
-   */
+  /** Begin a transaction. */
   async begin(signal?: AbortSignal): Promise<Transaction> {
     this.checkState('begin');
 
@@ -587,10 +539,7 @@ export class Connection {
     return new Transaction(this);
   }
 
-  /**
-   * Commit the current transaction.
-   * @internal Called by {@link Transaction} on commit.
-   */
+  /** @internal Commit the current transaction. Called by Transaction. */
   async _commit(signal?: AbortSignal): Promise<void> {
     const msg = buildCommitRequest(this._sessionId);
     await this._sendWithTimeout(msg, signal);
@@ -617,10 +566,7 @@ export class Connection {
     this._state = 'idle';
   }
 
-  /**
-   * Rollback the current transaction.
-   * @internal Called by {@link Transaction} on rollback.
-   */
+  /** @internal Rollback the current transaction. Called by Transaction. */
   async _rollback(signal?: AbortSignal): Promise<void> {
     const msg = buildRollbackRequest(this._sessionId);
     await this._sendWithTimeout(msg, signal);
@@ -638,10 +584,7 @@ export class Connection {
     this._state = 'idle';
   }
 
-  /**
-   * Create a named savepoint inside the current transaction.
-   * @internal Called by {@link Transaction} to create savepoints.
-   */
+  /** @internal Create a named savepoint. Called by Transaction. */
   async _savepoint(name: string, signal?: AbortSignal): Promise<void> {
     validateSavepointName(name);
 
@@ -667,10 +610,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Rollback to a previously created savepoint.
-   * @internal Called by {@link Transaction} to rollback to a savepoint.
-   */
+  /** @internal Rollback to a previously created savepoint. Called by Transaction. */
   async _rollbackTo(name: string, signal?: AbortSignal): Promise<void> {
     validateSavepointName(name);
 
@@ -696,9 +636,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Ping the server to check connection health.
-   */
+  /** Ping the server to check connection health. */
   async ping(signal?: AbortSignal): Promise<void> {
     if (this._state === 'closed') {
       throw ErrClosed();
@@ -724,9 +662,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Reset the connection session.
-   */
+  /** Reset the connection session. */
   async reset(signal?: AbortSignal): Promise<void> {
     if (this._state === 'closed') {
       throw ErrClosed();
@@ -741,9 +677,7 @@ export class Connection {
     this._activeResult = null;
   }
 
-  /**
-   * Close the connection.
-   */
+  /** Close the connection. */
   async close(): Promise<void> {
     if (this._state === 'closed') {
       return;
@@ -760,41 +694,31 @@ export class Connection {
     await this._transport.close();
   }
 
-  /**
-   * Create a prepared statement.
-   */
+  /** Create a prepared statement. */
   async prepare(query: string): Promise<PreparedStatement> {
     const { PreparedStatement } = await import('./prepared.js');
     return new PreparedStatement(this, query);
   }
 
-  /**
-   * Get the query execution plan without executing.
-   */
+  /** Get the query execution plan without executing. */
   async explain(query: string, options?: ExplainOptions): Promise<QueryPlan> {
     const { explain: doExplain } = await import('./explain.js');
     return doExplain(this, query, options);
   }
 
-  /**
-   * Execute a query with profiling.
-   */
+  /** Execute a query with profiling. */
   async profile(query: string, options?: ExplainOptions): Promise<QueryProfile> {
     const { profile: doProfile } = await import('./explain.js');
     return doProfile(this, query, options);
   }
 
-  /**
-   * Execute multiple queries in a batch.
-   */
+  /** Execute multiple queries in a batch. */
   async batch(queries: BatchQuery[], options?: BatchOptions): Promise<BatchSummary> {
     const { batch: doBatch } = await import('./batch.js');
     return doBatch(this, queries, options);
   }
 
-  /**
-   * Check connection state before operation.
-   */
+  /** Check connection state before operation. */
   private checkState(operation: string): void {
     if (this._state === 'closed') {
       throw ErrClosed();
@@ -809,9 +733,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Send a protobuf message with request timeout enforcement.
-   */
+  /** Send a protobuf message with request timeout enforcement. */
   private async _sendWithTimeout(msg: QuicClientMessage, signal?: AbortSignal): Promise<void> {
     const { signal: timeoutSignal, cleanup } = this._withRequestTimeout(signal);
     try {
@@ -821,9 +743,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Receive a protobuf message with request timeout enforcement.
-   */
+  /** Receive a protobuf message with request timeout enforcement. */
   private async _receiveWithTimeout(signal?: AbortSignal): Promise<QuicServerMessage> {
     const { signal: timeoutSignal, cleanup } = this._withRequestTimeout(signal);
     try {
@@ -833,10 +753,7 @@ export class Connection {
     }
   }
 
-  /**
-   * Create a combined abort signal from requestTimeout config and optional caller signal.
-   * Handles already-aborted signals (CWE-703).
-   */
+  /** Create a combined abort signal from requestTimeout and optional caller signal (CWE-703). */
   private _withRequestTimeout(signal?: AbortSignal): { signal?: AbortSignal; cleanup: () => void } {
     return withAbortTimeout(signal, this._config.requestTimeout);
   }
