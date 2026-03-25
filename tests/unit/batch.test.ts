@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { BatchQuery, BatchResult, BatchSummary, BatchOptions } from '../../src/batch.js';
-import { batch, batchParallel } from '../../src/batch.js';
+import { batch, batchParallel, batchAll, batchFirst, batchMap } from '../../src/batch.js';
 import { Connection } from '../../src/connection.js';
 import { MockTransport } from '../../src/transport.js';
 
@@ -448,6 +448,271 @@ describe('Batch Functional Tests', () => {
       expect(summary.successful).toBe(1);
       expect(summary.failed).toBe(0);
       expect(summary.results[0]!.success).toBe(true);
+
+      await conn.close();
+    });
+  });
+
+  describe('batch with transaction wrapping', () => {
+    it('should commit transaction when all queries succeed', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // Queue BEGIN response
+      transport.queueProtoResponse({
+        begin: { sessionId: 'batch-test-session', txId: 'tx-1' },
+      });
+
+      // Queue query responses
+      queueQueryResponses(transport, 1);
+      queueQueryResponses(transport, 2);
+
+      // Queue COMMIT response
+      transport.queueProtoResponse({ commit: { success: true } });
+
+      const summary = await batch(
+        conn,
+        [{ query: 'RETURN 1 AS num' }, { query: 'RETURN 2 AS num' }],
+        { transaction: true }
+      );
+
+      expect(summary.total).toBe(2);
+      expect(summary.successful).toBe(2);
+      expect(summary.failed).toBe(0);
+
+      await conn.close();
+    });
+
+    it('should rollback transaction when a query fails', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // Queue BEGIN response
+      transport.queueProtoResponse({
+        begin: { sessionId: 'batch-test-session', txId: 'tx-2' },
+      });
+
+      // First query succeeds
+      queueQueryResponses(transport, 1);
+
+      // Second query returns an error
+      transport.queueProtoResponse({
+        execute: {
+          error: {
+            code: '42000',
+            message: 'Syntax error',
+            type: 'SYNTAX',
+            anchor: '',
+          },
+        },
+      });
+
+      // Queue ROLLBACK response
+      transport.queueProtoResponse({ rollback: { success: true } });
+
+      const summary = await batch(
+        conn,
+        [{ query: 'RETURN 1 AS num' }, { query: 'INVALID QUERY' }],
+        { transaction: true }
+      );
+
+      expect(summary.total).toBe(2);
+      expect(summary.successful).toBe(1);
+      expect(summary.failed).toBe(1);
+
+      await conn.close();
+    });
+  });
+
+  describe('batch cancel behavior', () => {
+    it('should mark remaining queries as cancelled when signal is pre-aborted', async () => {
+      const { conn } = await createMockConnection();
+
+      const controller = new AbortController();
+      // Abort before batch starts -- deterministic cancellation
+      controller.abort();
+
+      const queries: BatchQuery[] = [
+        { query: 'RETURN 1 AS num' },
+        { query: 'RETURN 2 AS num' },
+        { query: 'RETURN 3 AS num' },
+      ];
+
+      const summary = await batch(conn, queries, { signal: controller.signal });
+
+      // All queries should be cancelled
+      expect(summary.total).toBe(3);
+      expect(summary.failed).toBe(3);
+      expect(summary.successful).toBe(0);
+      for (const r of summary.results) {
+        expect(r.error?.message).toBe('Batch execution cancelled');
+      }
+
+      await conn.close();
+    });
+  });
+
+  describe('batch stopOnError', () => {
+    it('should skip remaining queries after first error', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // First query returns an error
+      transport.queueProtoResponse({
+        execute: {
+          error: {
+            code: '42000',
+            message: 'Syntax error',
+            type: 'SYNTAX',
+            anchor: '',
+          },
+        },
+      });
+
+      const queries: BatchQuery[] = [
+        { query: 'INVALID' },
+        { query: 'RETURN 2 AS num' },
+        { query: 'RETURN 3 AS num' },
+      ];
+
+      const summary = await batch(conn, queries, { stopOnError: true });
+
+      expect(summary.total).toBe(3);
+      expect(summary.failed).toBe(3);
+      expect(summary.successful).toBe(0);
+
+      // First result should be the actual error
+      expect(summary.results[0]!.success).toBe(false);
+      // Remaining should be skipped
+      expect(summary.results[1]!.error?.message).toContain('Skipped');
+      expect(summary.results[2]!.error?.message).toContain('Skipped');
+
+      await conn.close();
+    });
+  });
+
+  describe('batchAll', () => {
+    it('should return only successful row results', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      queueQueryResponses(transport, 1);
+      queueQueryResponses(transport, 2);
+
+      const results = await batchAll(conn, [
+        { query: 'RETURN 1 AS num' },
+        { query: 'RETURN 2 AS num' },
+      ]);
+
+      expect(results).toHaveLength(2);
+      expect(results[0]).toHaveLength(1);
+      expect(results[1]).toHaveLength(1);
+
+      await conn.close();
+    });
+  });
+
+  describe('batchFirst', () => {
+    it('should return first successful result', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      queueQueryResponses(transport, 42);
+
+      const result = await batchFirst(conn, [{ query: 'RETURN 42 AS num' }]);
+
+      expect(result).not.toBeNull();
+      expect(result).toHaveLength(1);
+
+      await conn.close();
+    });
+
+    it('should return null when all queries fail', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // Queue error response
+      transport.queueProtoResponse({
+        execute: {
+          error: {
+            code: '42000',
+            message: 'Syntax error',
+            type: 'SYNTAX',
+            anchor: '',
+          },
+        },
+      });
+
+      const result = await batchFirst(conn, [{ query: 'INVALID' }]);
+
+      expect(result).toBeNull();
+
+      await conn.close();
+    });
+  });
+
+  describe('batchMap', () => {
+    it('should execute template query for each item', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      queueQueryResponses(transport, 1);
+      queueQueryResponses(transport, 2);
+
+      const summary = await batchMap(conn, 'CREATE (n:Person {name: $name})', [
+        { name: 'Alice' },
+        { name: 'Bob' },
+      ]);
+
+      expect(summary.total).toBe(2);
+      expect(summary.successful).toBe(2);
+
+      await conn.close();
+    });
+  });
+
+  describe('batchParallel error handling', () => {
+    it('should collect errors without stopping', async () => {
+      const { conn, transport } = await createMockConnection();
+
+      // First query succeeds
+      queueQueryResponses(transport, 1);
+
+      // Second query fails
+      transport.queueProtoResponse({
+        execute: {
+          error: {
+            code: '42000',
+            message: 'Syntax error',
+            type: 'SYNTAX',
+            anchor: '',
+          },
+        },
+      });
+
+      // Third query succeeds
+      queueQueryResponses(transport, 3);
+
+      const summary = await batchParallel(
+        conn,
+        [{ query: 'RETURN 1 AS num' }, { query: 'INVALID' }, { query: 'RETURN 3 AS num' }],
+        { concurrency: 4 }
+      );
+
+      expect(summary.total).toBe(3);
+      expect(summary.successful).toBe(2);
+      expect(summary.failed).toBe(1);
+      // Results should be sorted by index
+      expect(summary.results[0]!.index).toBe(0);
+      expect(summary.results[1]!.index).toBe(1);
+      expect(summary.results[2]!.index).toBe(2);
+      expect(summary.results[1]!.success).toBe(false);
+
+      await conn.close();
+    });
+
+    it('should handle empty query list', async () => {
+      const { conn } = await createMockConnection();
+
+      const summary = await batchParallel(conn, [], { concurrency: 4 });
+
+      expect(summary.total).toBe(0);
+      expect(summary.successful).toBe(0);
+      expect(summary.failed).toBe(0);
+      expect(summary.results).toHaveLength(0);
 
       await conn.close();
     });
