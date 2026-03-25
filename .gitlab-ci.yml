@@ -98,7 +98,7 @@ include:
       package_scope: '@geodedb'
       access: 'public'
       environment: 'npm-publish'
-      provenance: true  # Requires GitLab-hosted runners
+      provenance: false  # Requires GitLab-hosted runners; self-hosted runners not supported
 
   # Release creation
   - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.9.3
