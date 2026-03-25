@@ -4,6 +4,7 @@
  * Connection management and query execution using protobuf wire protocol.
  */
 
+import { withAbortTimeout } from './abort-utils.js';
 import type { GeodeConfig } from './config.js';
 import { validateConfig } from './config.js';
 import {
@@ -496,20 +497,18 @@ export class Connection {
       return null;
     }
 
-    const controller = new AbortController();
     const inlineTimeoutMs = this._config.inlineTimeout ?? 5000;
-    const timeoutId = setTimeout(() => controller.abort(), inlineTimeoutMs);
+    const { signal: timeoutSignal, cleanup } = withAbortTimeout(signal, inlineTimeoutMs);
 
     try {
-      const response = await this._transport.receiveProto(controller.signal);
-      return response;
+      return await this._transport.receiveProto(timeoutSignal);
     } catch (err) {
       if (err instanceof TransportError && err.cause?.message === 'Aborted') {
         return null;
       }
       throw err;
     } finally {
-      clearTimeout(timeoutId);
+      cleanup();
     }
   }
 
@@ -839,39 +838,6 @@ export class Connection {
    * Handles already-aborted signals (CWE-703).
    */
   private _withRequestTimeout(signal?: AbortSignal): { signal?: AbortSignal; cleanup: () => void } {
-    const timeoutMs = this._config.requestTimeout ?? 0;
-    if (!timeoutMs || timeoutMs <= 0) {
-      return { signal, cleanup: () => {} };
-    }
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    // Honor already-aborted signals immediately
-    if (signal?.aborted) {
-      controller.abort();
-      return {
-        signal: controller.signal,
-        cleanup: () => {
-          clearTimeout(timeoutId);
-        },
-      };
-    }
-
-    let onAbort: (() => void) | null = null;
-    if (signal) {
-      onAbort = () => controller.abort();
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    return {
-      signal: controller.signal,
-      cleanup: () => {
-        clearTimeout(timeoutId);
-        if (signal && onAbort) {
-          signal.removeEventListener('abort', onAbort);
-        }
-      },
-    };
+    return withAbortTimeout(signal, this._config.requestTimeout);
   }
 }
