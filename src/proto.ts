@@ -25,6 +25,7 @@ export interface HelloRequest {
   clientName: string;
   clientVersion: string;
   wantedConformance: string;
+  graph?: string;
 }
 
 export interface HelloResponse {
@@ -32,6 +33,8 @@ export interface HelloResponse {
   sessionId: string;
   errorMessage: string;
   capabilities: string[];
+  passwordResetRequired?: boolean;
+  graph?: string;
 }
 
 export interface Param {
@@ -586,18 +589,19 @@ export function buildHelloRequest(
   clientName: string,
   clientVersion: string,
   conformance: string,
-  tenantId?: string
+  tenantId?: string,
+  graph?: string
 ): QuicClientMessage {
-  return {
-    hello: {
-      username,
-      password,
-      tenantId,
-      clientName,
-      clientVersion,
-      wantedConformance: conformance,
-    },
+  const helloReq: HelloRequest = {
+    username,
+    password,
+    clientName,
+    clientVersion,
+    wantedConformance: conformance,
+    ...(tenantId ? { tenantId } : {}),
+    ...(graph ? { graph } : {}),
   };
+  return { hello: helloReq };
 }
 
 /**

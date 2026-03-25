@@ -114,6 +114,9 @@ export interface GeodeConfig {
   // gRPC-specific options
   /** Enable TLS for gRPC (default: true) */
   tls?: boolean;
+
+  /** Graph name for DSN graph binding. When set, the server binds the session to this graph. */
+  graph?: string;
 }
 
 /**
@@ -315,6 +318,12 @@ function parseURLDSN(dsn: string, cfg: GeodeConfig, scheme: DSNScheme): GeodeCon
   }
   if (url.password) {
     cfg.password = decodeURIComponent(url.password);
+  }
+
+  // Extract graph from URL path (e.g. quic://host:3141/mygraph)
+  const urlPath = url.pathname;
+  if (urlPath && urlPath !== '/') {
+    cfg.graph = urlPath.replace(/^\//, '');
   }
 
   // Parse query parameters
@@ -522,6 +531,10 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
         }
         break;
       }
+
+      case 'graph':
+        cfg.graph = value;
+        break;
 
       // Ignore unknown parameters for forward compatibility
     }

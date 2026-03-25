@@ -184,7 +184,9 @@ export class Connection {
       this._config.password ?? '',
       this._config.helloName,
       this._config.helloVersion,
-      this._config.conformance
+      this._config.conformance,
+      undefined, // tenantId
+      this._config.graph
     );
 
     await this._sendWithTimeout(msg);
