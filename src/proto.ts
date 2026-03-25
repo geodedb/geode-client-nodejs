@@ -339,9 +339,11 @@ async function initProto(): Promise<void> {
 }
 
 /**
- * Initialize protobuf types synchronously (for use after async init).
+ * Initialize protobuf types synchronously.
+ * Safe to call multiple times; only loads on first call.
+ * Prefer ensureProtoInitialized() in async contexts to avoid blocking the event loop.
  */
-function initProtoSync(): void {
+export function initProtoSync(): void {
   if (protoRoot) return;
 
   protoRoot = protobuf.loadSync(PROTO_PATH);
@@ -349,8 +351,9 @@ function initProtoSync(): void {
   QuicServerMessageType = protoRoot.lookupType('geode.QuicServerMessage');
 }
 
-// Initialize on module load
-initProtoSync();
+// Proto is initialized lazily on first use via initProtoSync() fallback
+// in encodeQuicClientMessage/decodeQuicServerMessage, or proactively
+// via the exported ensureProtoInitialized() / initProtoSync().
 
 /**
  * Ensure proto is initialized.

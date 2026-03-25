@@ -203,6 +203,7 @@ export {
   rowToRecord,
   getProtoPath,
   ensureProtoInitialized,
+  initProtoSync,
   type HelloRequest,
   type HelloResponse,
   type ExecuteRequest,
