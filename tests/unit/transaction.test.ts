@@ -8,10 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { Connection } from '../../src/connection.js';
 import { MockTransport } from '../../src/transport.js';
 import { Transaction, withTransaction } from '../../src/transaction.js';
-import {
-  ERR_TX_DONE_MESSAGE,
-  ERR_NO_TX_MESSAGE,
-} from '../../src/errors.js';
+import { ERR_TX_DONE_MESSAGE } from '../../src/errors.js';
 
 /**
  * Helper: create a connected Connection with MockTransport.

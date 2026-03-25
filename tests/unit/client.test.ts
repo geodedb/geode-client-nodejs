@@ -6,9 +6,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GeodeClient } from '../../src/client.js';
 import type { GeodeConfig } from '../../src/config.js';
-import type { Connection, QueryOptions } from '../../src/connection.js';
+import type { Connection } from '../../src/connection.js';
 import type { ConnectionPool } from '../../src/pool.js';
-import type { QueryResult } from '../../src/result.js';
 import type { Transaction } from '../../src/transaction.js';
 
 // We test the specific bugs at the module level by importing the source directly
@@ -482,47 +481,47 @@ describe('GeodeClient convenience graph methods', () => {
   });
 
   it('should create a node with single label', async () => {
-    const node = await client.createNode('Person', { name: 'Alice' });
+    await client.createNode('Person', { name: 'Alice' });
     expect(mockConn.query).toHaveBeenCalled();
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('CREATE (n:Person');
   });
 
   it('should create a node with multiple labels', async () => {
-    const node = await client.createNode(['Person', 'Employee']);
+    await client.createNode(['Person', 'Employee']);
     expect(mockConn.query).toHaveBeenCalled();
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('Person:Employee');
   });
 
   it('should create a node without properties', async () => {
-    const node = await client.createNode('Person');
+    await client.createNode('Person');
     expect(mockConn.query).toHaveBeenCalled();
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).not.toContain('$props');
   });
 
   it('should find nodes by label', async () => {
-    const nodes = await client.findNodes('Person');
+    await client.findNodes('Person');
     expect(mockConn.queryAll).toHaveBeenCalled();
   });
 
   it('should find nodes with filter', async () => {
-    const nodes = await client.findNodes('Person', { name: 'Alice' });
+    await client.findNodes('Person', { name: 'Alice' });
     const callArgs = (mockConn.queryAll as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('WHERE');
     expect(callArgs[0]).toContain('n.name = $name');
   });
 
   it('should find nodes with skip and limit', async () => {
-    const nodes = await client.findNodes('Person', undefined, { skip: 5, limit: 10 });
+    await client.findNodes('Person', undefined, { skip: 5, limit: 10 });
     const callArgs = (mockConn.queryAll as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('SKIP 5');
     expect(callArgs[0]).toContain('LIMIT 10');
   });
 
   it('should find a single node', async () => {
-    const node = await client.findNode('Person', 'name', 'Alice');
+    await client.findNode('Person', 'name', 'Alice');
     expect(mockConn.queryAll).toHaveBeenCalled();
   });
 
@@ -533,44 +532,29 @@ describe('GeodeClient convenience graph methods', () => {
   });
 
   it('should create a relationship', async () => {
-    const rel = await client.createRelationship(
-      'Person',
-      'name',
-      'Alice',
-      'KNOWS',
-      'Person',
-      'name',
-      'Bob'
-    );
+    await client.createRelationship('Person', 'name', 'Alice', 'KNOWS', 'Person', 'name', 'Bob');
     expect(mockConn.query).toHaveBeenCalled();
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('KNOWS');
   });
 
   it('should create a relationship with properties', async () => {
-    const rel = await client.createRelationship(
-      'Person',
-      'name',
-      'Alice',
-      'KNOWS',
-      'Person',
-      'name',
-      'Bob',
-      { since: 2020 }
-    );
+    await client.createRelationship('Person', 'name', 'Alice', 'KNOWS', 'Person', 'name', 'Bob', {
+      since: 2020,
+    });
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('$props');
   });
 
   it('should delete a node', async () => {
-    const count = await client.deleteNode('Person', 'name', 'Alice');
+    await client.deleteNode('Person', 'name', 'Alice');
     expect(mockConn.query).toHaveBeenCalled();
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('DETACH DELETE');
   });
 
   it('should update a node', async () => {
-    const node = await client.updateNode('Person', 'name', 'Alice', { age: 30 });
+    await client.updateNode('Person', 'name', 'Alice', { age: 30 });
     expect(mockConn.query).toHaveBeenCalled();
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('SET n.age = $age');
@@ -580,7 +564,7 @@ describe('GeodeClient convenience graph methods', () => {
     (mockConn.query as ReturnType<typeof vi.fn>).mockResolvedValue({
       firstObject: vi.fn().mockResolvedValue({ count: 42 }),
     });
-    const count = await client.countNodes('Person');
+    await client.countNodes('Person');
     expect(mockConn.query).toHaveBeenCalled();
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('count(n)');
@@ -590,7 +574,7 @@ describe('GeodeClient convenience graph methods', () => {
     (mockConn.query as ReturnType<typeof vi.fn>).mockResolvedValue({
       firstObject: vi.fn().mockResolvedValue({ count: 5 }),
     });
-    const count = await client.countNodes('Person', { active: true });
+    await client.countNodes('Person', { active: true });
     const callArgs = (mockConn.query as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(callArgs[0]).toContain('WHERE');
   });
