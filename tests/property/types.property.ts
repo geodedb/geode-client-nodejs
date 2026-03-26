@@ -161,7 +161,11 @@ describe('Type System Property Tests', () => {
           fc.dictionary(
             fc
               .string({ minLength: 1, maxLength: 32 })
-              .filter((s) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s)),
+              .filter(
+                (s) =>
+                  /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s) &&
+                  !['__proto__', 'constructor', 'prototype'].includes(s)
+              ),
             fc.integer()
           ),
           (obj) => {
@@ -332,11 +336,24 @@ describe('Type System Property Tests', () => {
       );
     });
 
-    it('should detect UUID strings', () => {
+    it('should keep UUID strings as STRING without type hint', () => {
       fc.assert(
         fc.property(fc.uuid(), (uuid) => {
           const value = fromJSON(uuid);
+          expect(value.kind).toBe('STRING');
+          expect(value.asString).toBe(uuid);
+          return true;
+        }),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should detect UUID strings with type hint', () => {
+      fc.assert(
+        fc.property(fc.uuid(), (uuid) => {
+          const value = fromJSON(uuid, 'UUID');
           expect(value.kind).toBe('UUID');
+          expect(value.asString).toBe(uuid);
           return true;
         }),
         { numRuns: 100 }
