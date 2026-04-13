@@ -13,6 +13,8 @@ GEODE_CONTAINER ?= geode-nodejs-test
 GEODE_HOST ?= 127.0.0.1
 GEODE_PORT ?= 3141
 GEODE_GRPC_PORT ?= 50051
+GEODE_USERNAME ?= geode
+GEODE_PASSWORD ?= GeodeTestPassword123!
 
 # Path to canonical proto file in the main Geode server repo
 CANONICAL_PROTO ?= ../geode/src/proto/geode.proto
@@ -148,7 +150,7 @@ test-integration:
 	@echo "Start server first: cd ../geode && ./zig-out/bin/geode serve"
 	@echo "Or use: make docker-start"
 	@echo ""
-	GEODE_HOST=$(GEODE_HOST) GEODE_PORT=$(GEODE_PORT) \
+	GEODE_HOST=$(GEODE_HOST) GEODE_PORT=$(GEODE_PORT) GEODE_USERNAME=$(GEODE_USERNAME) GEODE_PASSWORD=$(GEODE_PASSWORD) GEODE_TLS_CA=$(GEODE_TLS_CA) \
 		$(NPM) run test:integration
 	@echo "✓ Integration tests complete"
 
@@ -156,7 +158,7 @@ test-integration-docker: docker-start
 	@echo "Running integration tests with Docker..."
 	@echo "Waiting for Geode server to be ready..."
 	@sleep 3
-	GEODE_HOST=$(GEODE_HOST) GEODE_PORT=$(GEODE_PORT) \
+	GEODE_HOST=$(GEODE_HOST) GEODE_PORT=$(GEODE_PORT) GEODE_USERNAME=$(GEODE_USERNAME) GEODE_PASSWORD=$(GEODE_PASSWORD) GEODE_TLS_CA=$(GEODE_TLS_CA) \
 		$(NPM) run test:integration || \
 		($(MAKE) docker-stop && exit 1)
 	$(MAKE) docker-stop
@@ -169,7 +171,7 @@ test-integration-grpc:
 	@echo "Start server first: cd ../geode && ./zig-out/bin/geode serve --listen-grpc 0.0.0.0:50051"
 	@echo "Or use: make docker-start"
 	@echo ""
-	GEODE_HOST=$(GEODE_HOST) GEODE_GRPC_PORT=$(GEODE_GRPC_PORT) GEODE_TRANSPORT=grpc \
+	GEODE_HOST=$(GEODE_HOST) GEODE_PORT=$(GEODE_GRPC_PORT) GEODE_TRANSPORT=grpc GEODE_USERNAME=$(GEODE_USERNAME) GEODE_PASSWORD=$(GEODE_PASSWORD) GEODE_TLS_CA=$(GEODE_TLS_CA) \
 		$(NPM) run test:integration
 	@echo "✓ gRPC integration tests complete"
 
@@ -235,11 +237,13 @@ docker-start:
 	@echo "Starting Geode Docker container..."
 	@$(DOCKER) rm -f $(GEODE_CONTAINER) 2>/dev/null || true
 	$(DOCKER) run -d --name $(GEODE_CONTAINER) \
-		-e GEODE_ALLOW_NO_AUTH=1 \
+		-e GEODE_DEFAULT_PASSWORD=$(GEODE_PASSWORD) \
+		-e GEODE_ADMIN_PASSWORD=$(GEODE_PASSWORD) \
+		-e GEODE_DISABLE_AUDIT=1 \
 		-p $(GEODE_PORT):3141/udp \
 		-p $(GEODE_GRPC_PORT):50051/tcp \
 		$(GEODE_IMAGE) \
-		serve --listen 0.0.0.0:3141 --listen-grpc 0.0.0.0:50051 --log-level info --disable-auth
+		serve --listen 0.0.0.0:3141 --listen-grpc 0.0.0.0:50051 --log-level info
 	@echo "✓ Geode container started"
 	@echo "  Container: $(GEODE_CONTAINER)"
 	@echo "  QUIC Port: $(GEODE_PORT)/udp"

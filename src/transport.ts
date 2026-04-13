@@ -246,7 +246,7 @@ export class QuicTransport extends BaseTransport {
         {
           host,
           port,
-          serverName: cfg.serverName ?? host,
+          serverName: cfg.serverName ?? (cfg.insecureSkipVerify ? 'localhost' : host),
           crypto: cryptoOps,
           config,
         },

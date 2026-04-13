@@ -31,10 +31,7 @@ export interface AbortHandle {
  * @param signal  Optional upstream AbortSignal to honor
  * @param timeoutMs  Timeout in milliseconds (0 or negative means no timeout)
  */
-export function withAbortTimeout(
-  signal?: AbortSignal,
-  timeoutMs?: number
-): AbortHandle {
+export function withAbortTimeout(signal?: AbortSignal, timeoutMs?: number): AbortHandle {
   const effectiveTimeout = timeoutMs ?? 0;
 
   // No timeout requested — pass through the caller's signal as-is

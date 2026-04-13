@@ -280,9 +280,8 @@ export class Connection {
       let orderKeys: string[] = [];
 
       // Try to receive inline data page with short timeout
-      const inlineResponse = await this._tryReceiveInline(signal);
-      if (inlineResponse?.execute) {
-        const inlineExec = inlineResponse.execute;
+      const inlineExec = await this._readInlineExecute(signal);
+      if (inlineExec) {
         if (isErrorResponse(inlineExec)) {
           this._state = this._inTransaction ? 'in_transaction' : 'idle';
           throw protoErrorToDriverError(inlineExec, inlineExec.status?.statusClass);
@@ -305,10 +304,13 @@ export class Connection {
         await this._sendWithTimeout(pullMsg, signal);
 
         // Read pull response - server wraps data in pull.response, not execute
-        const pullResponse = await this._receiveWithTimeout(signal);
-        const pullExec = pullResponse.pull?.response ?? pullResponse.execute;
+        while (true) {
+          const pullResponse = await this._receiveWithTimeout(signal);
+          const pullExec = pullResponse.pull?.response ?? pullResponse.execute;
 
-        if (pullExec) {
+          if (!pullExec) {
+            break;
+          }
           if (isErrorResponse(pullExec)) {
             this._state = this._inTransaction ? 'in_transaction' : 'idle';
             throw protoErrorToDriverError(pullExec, pullExec.status?.statusClass);
@@ -319,6 +321,10 @@ export class Connection {
             isFinal = page.final;
             isOrdered = page.ordered;
             orderKeys = page.orderKeys;
+            break;
+          }
+          if (pullExec.heartbeat) {
+            break;
           }
         }
       }
@@ -396,16 +402,13 @@ export class Connection {
       // If there's a schema, drain any data pages
       if (isSchemaResponse(execResp)) {
         this._columns = execResp.schema!.columns;
-        const inlineResponse = await this._tryReceiveInline(signal);
-        if (inlineResponse?.execute) {
-          if (isErrorResponse(inlineResponse.execute)) {
-            throw protoErrorToDriverError(
-              inlineResponse.execute,
-              inlineResponse.execute.status?.statusClass
-            );
+        const inlineExec = await this._readInlineExecute(signal);
+        if (inlineExec) {
+          if (isErrorResponse(inlineExec)) {
+            throw protoErrorToDriverError(inlineExec, inlineExec.status?.statusClass);
           }
           // QUAL-T7: Drain remaining pages if the inline response is not final
-          if (isDataPageResponse(inlineResponse.execute) && !inlineResponse.execute.page!.final) {
+          if (isDataPageResponse(inlineExec) && !inlineExec.page!.final) {
             await this._drainRemainingPages(signal);
           }
         }
@@ -428,29 +431,32 @@ export class Connection {
     const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
     await this._sendWithTimeout(pullMsg, signal);
 
-    const response = await this._receiveWithTimeout(signal);
+    while (true) {
+      const response = await this._receiveWithTimeout(signal);
 
-    // Server sends pull data in pull.response, not execute
-    const execResp = response.pull?.response ?? response.execute;
+      // Server sends pull data in pull.response, not execute
+      const execResp = response.pull?.response ?? response.execute;
 
-    if (!execResp) {
-      return { rows: [], final: true };
+      if (!execResp) {
+        return { rows: [], final: true };
+      }
+
+      if (isErrorResponse(execResp)) {
+        throw protoErrorToDriverError(execResp, execResp.status?.statusClass);
+      }
+
+      if (isDataPageResponse(execResp)) {
+        const page = execResp.page!;
+        return {
+          rows: dataPageToRows(page, this._columns),
+          final: page.final,
+        };
+      }
+
+      if (execResp.heartbeat) {
+        return { rows: [], final: true };
+      }
     }
-
-    if (isErrorResponse(execResp)) {
-      throw protoErrorToDriverError(execResp, execResp.status?.statusClass);
-    }
-
-    if (isDataPageResponse(execResp)) {
-      const page = execResp.page!;
-      return {
-        rows: dataPageToRows(page, this._columns),
-        final: page.final,
-      };
-    }
-
-    // Metrics, profile, etc. indicate no more data
-    return { rows: [], final: true };
   }
 
   /** Try to receive an inline response with short timeout. */
@@ -471,6 +477,23 @@ export class Connection {
       throw err;
     } finally {
       cleanup();
+    }
+  }
+
+  /** Read inline execute responses until a page, error, heartbeat, or timeout arrives. */
+  private async _readInlineExecute(signal?: AbortSignal): Promise<ExecutionResponse | null> {
+    while (true) {
+      const inlineResponse = await this._tryReceiveInline(signal);
+      const inlineExec = inlineResponse?.execute;
+      if (!inlineExec) {
+        return null;
+      }
+      if (isErrorResponse(inlineExec) || isDataPageResponse(inlineExec)) {
+        return inlineExec;
+      }
+      if (inlineExec.heartbeat) {
+        return null;
+      }
     }
   }
 
@@ -496,8 +519,7 @@ export class Connection {
 
       if (isDataPageResponse(pullExec)) {
         done = pullExec.page!.final;
-      } else {
-        // Non-data response (metrics, profile) means no more data
+      } else if (pullExec.heartbeat) {
         done = true;
       }
     }

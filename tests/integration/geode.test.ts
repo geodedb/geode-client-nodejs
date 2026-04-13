@@ -55,6 +55,15 @@ describe('Geode Integration Tests', () => {
   let client: GeodeClient;
   let dsn: string;
   let skipTests = false;
+  const isGrpc = process.env.GEODE_TRANSPORT === 'grpc';
+  const explicitIntegrationConfig = [
+    'GEODE_HOST',
+    'GEODE_PORT',
+    'GEODE_TRANSPORT',
+    'GEODE_USERNAME',
+    'GEODE_PASSWORD',
+    'GEODE_TLS_CA',
+  ].some((key) => Boolean(process.env[key]));
 
   beforeAll(async () => {
     // Get server connection info from environment or defaults
@@ -67,6 +76,9 @@ describe('Geode Integration Tests', () => {
       // Attempt to connect to Geode server with retries for Docker startup
       client = await connectWithRetry(dsn);
     } catch (e) {
+      if (explicitIntegrationConfig) {
+        throw e;
+      }
       console.warn(`
         ========================================
         Skipping integration tests.
@@ -285,6 +297,7 @@ describe('Geode Integration Tests', () => {
 
     it('should support savepoints', async () => {
       if (skipTests) return;
+      if (isGrpc) return;
       await client.withTransaction(async (tx) => {
         await tx.exec("CREATE (n:TxTest {name: 'sp1'})");
         await tx.savepoint('sp1');
@@ -304,6 +317,7 @@ describe('Geode Integration Tests', () => {
   describe('Aggregations', () => {
     beforeAll(async () => {
       if (skipTests) return;
+      await client.exec('MATCH (n:AggTest) DELETE n');
       await client.exec(`
         CREATE (a:AggTest {value: 10}),
                (b:AggTest {value: 20}),

@@ -487,10 +487,29 @@ export class GrpcTransport implements Transport {
           resolved = true;
         });
 
-        this.enqueueResponse({ execute: response as ExecutionResponse });
+        const execResponse = response as ExecutionResponse & {
+          payload?: string;
+        };
+        this.enqueueResponse({ execute: execResponse });
+
+        // Geode's gRPC Execute stream is complete once the final page is emitted.
+        // Mark the stream complete immediately so the next query does not race with
+        // the trailing end event and cancel an already-finished stream.
+        if (
+          (execResponse.payload === 'page' && execResponse.page?.final) ||
+          execResponse.payload === 'error' ||
+          execResponse.payload === 'heartbeat'
+        ) {
+          this.clearStreamTimeout();
+          this._activeStream = null;
+          this._streamComplete = true;
+        }
 
         // PERF-2: Apply backpressure when buffer exceeds threshold
-        if (this._pendingResponses.length >= this._backpressureThreshold) {
+        if (
+          this._activeStream === stream &&
+          this._pendingResponses.length >= this._backpressureThreshold
+        ) {
           this._streamPaused = true;
           stream.pause();
         }
@@ -505,8 +524,10 @@ export class GrpcTransport implements Transport {
 
       stream.on('end', () => {
         this.clearStreamTimeout();
-        this._activeStream = null;
-        this._streamComplete = true;
+        if (this._activeStream === stream) {
+          this._activeStream = null;
+          this._streamComplete = true;
+        }
         if (!resolved) {
           resolved = true;
           resolve();
@@ -515,8 +536,10 @@ export class GrpcTransport implements Transport {
 
       stream.on('error', (error: grpc.ServiceError) => {
         this.clearStreamTimeout();
-        this._activeStream = null;
-        this._streamComplete = true;
+        if (this._activeStream === stream) {
+          this._activeStream = null;
+          this._streamComplete = true;
+        }
 
         const transportError = new TransportError({
           operation: 'execute',
@@ -524,11 +547,13 @@ export class GrpcTransport implements Transport {
           cause: new Error(`gRPC error ${error.code}: ${error.message}`),
         });
 
-        // Reject any pending reads
-        const pendingReads = this._pendingProtoReads;
-        this._pendingProtoReads = [];
-        for (const p of pendingReads) {
-          p.reject(transportError);
+        // Reject any pending reads for the active stream only.
+        if (this._activeStream === null || this._streamComplete) {
+          const pendingReads = this._pendingProtoReads;
+          this._pendingProtoReads = [];
+          for (const p of pendingReads) {
+            p.reject(transportError);
+          }
         }
 
         if (!resolved) {
@@ -566,8 +591,10 @@ export class GrpcTransport implements Transport {
 
     this._streamTimeoutTimer = setTimeout(() => {
       this._streamTimeoutTimer = null;
-      this._activeStream = null;
-      this._streamComplete = true;
+      if (this._activeStream === stream) {
+        this._activeStream = null;
+        this._streamComplete = true;
+      }
       stream.cancel();
 
       const timeoutError = new TransportError({
@@ -579,10 +606,12 @@ export class GrpcTransport implements Transport {
       });
 
       // Reject any pending reads
-      const pendingReads = this._pendingProtoReads;
-      this._pendingProtoReads = [];
-      for (const p of pendingReads) {
-        p.reject(timeoutError);
+      if (this._activeStream === null || this._streamComplete) {
+        const pendingReads = this._pendingProtoReads;
+        this._pendingProtoReads = [];
+        for (const p of pendingReads) {
+          p.reject(timeoutError);
+        }
       }
 
       markResolved();
