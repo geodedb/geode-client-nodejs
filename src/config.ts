@@ -151,7 +151,7 @@ export function defaultConfig(): GeodeConfig {
     connectTimeout: 30000,
     requestTimeout: 120000,
     keepAliveInterval: 10000,
-    maxIdleTime: 30000,
+    maxIdleTime: 120000,
     tls: true,
   };
 }

@@ -161,6 +161,7 @@ export class GrpcTransport implements Transport {
         }
         credentials = grpc.credentials.createSsl(rootCerts, null, null, {
           checkServerIdentity: () => undefined,
+          rejectUnauthorized: false,
         });
       } else {
         const sslOptions = await buildGrpcSslOptions(cfg);
@@ -179,6 +180,12 @@ export class GrpcTransport implements Transport {
         'grpc.keepalive_timeout_ms': 5000,
         'grpc.keepalive_permit_without_calls': 1,
       };
+
+      if (cfg.insecureSkipVerify) {
+        const authority = cfg.serverName ?? 'localhost';
+        options['grpc.ssl_target_name_override'] = authority;
+        options['grpc.default_authority'] = authority;
+      }
 
       // Create client
       transport._client = new protoDescriptor.geode.GeodeService(address, credentials, options);

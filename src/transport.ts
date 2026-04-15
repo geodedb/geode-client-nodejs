@@ -156,6 +156,7 @@ export class QuicTransport extends BaseTransport {
     resolve: (value: QuicServerMessage) => void;
     reject: (error: Error) => void;
   }> = [];
+  private _pendingResponses: QuicServerMessage[] = [];
 
   constructor(
     address: string,
@@ -401,8 +402,9 @@ export class QuicTransport extends BaseTransport {
         const pending = this._pendingProtoReads.shift();
         if (pending) {
           pending.resolve(msg);
+        } else {
+          this._pendingResponses.push(msg);
         }
-        // Note: We don't buffer proto messages, they must be consumed immediately
       } catch (err) {
         // Reject pending reads on decode error
         const pending = this._pendingProtoReads.shift();
@@ -455,8 +457,11 @@ export class QuicTransport extends BaseTransport {
       };
 
       const writer = stream.writable.getWriter();
-      await writer.write(new Uint8Array(data));
-      writer.releaseLock();
+      try {
+        await writer.write(new Uint8Array(data));
+      } finally {
+        writer.releaseLock();
+      }
     } catch (e) {
       throw new TransportError({
         operation: 'sendProto',
@@ -474,6 +479,11 @@ export class QuicTransport extends BaseTransport {
 
     if (signal?.aborted) {
       throw new TransportError({ operation: 'receiveProto', cause: new Error('Aborted') });
+    }
+
+    const queued = this._pendingResponses.shift();
+    if (queued) {
+      return queued;
     }
 
     return new Promise((resolve, reject) => {
@@ -518,6 +528,7 @@ export class QuicTransport extends BaseTransport {
       pending.reject(ErrClosed());
     }
     this._pendingProtoReads = [];
+    this._pendingResponses = [];
     this._chunks = [];
     this._totalLength = 0;
 

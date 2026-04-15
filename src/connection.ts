@@ -762,6 +762,9 @@ export class Connection {
     const { signal: timeoutSignal, cleanup } = this._withRequestTimeout(signal);
     try {
       await this._transport.sendProto(msg, timeoutSignal);
+    } catch (e) {
+      await this._closeOnTransportError(e);
+      throw e;
     } finally {
       cleanup();
     }
@@ -772,6 +775,9 @@ export class Connection {
     const { signal: timeoutSignal, cleanup } = this._withRequestTimeout(signal);
     try {
       return await this._transport.receiveProto(timeoutSignal);
+    } catch (e) {
+      await this._closeOnTransportError(e);
+      throw e;
     } finally {
       cleanup();
     }
@@ -780,5 +786,29 @@ export class Connection {
   /** Create a combined abort signal from requestTimeout and optional caller signal (CWE-703). */
   private _withRequestTimeout(signal?: AbortSignal): { signal?: AbortSignal; cleanup: () => void } {
     return withAbortTimeout(signal, this._config.requestTimeout);
+  }
+
+  private async _closeOnTransportError(err: unknown): Promise<void> {
+    if (!(err instanceof TransportError) || err.cause?.message === 'Aborted') {
+      return;
+    }
+
+    if (this._state === 'closed') {
+      return;
+    }
+
+    this._state = 'closed';
+    this._inTransaction = false;
+
+    if (this._activeResult) {
+      this._activeResult._close();
+      this._activeResult = null;
+    }
+
+    try {
+      await this._transport.close();
+    } catch {
+      // Ignore close errors while tearing down a broken transport.
+    }
   }
 }

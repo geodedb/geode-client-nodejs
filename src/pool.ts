@@ -126,6 +126,7 @@ class RateLimiter {
 export class ConnectionPool {
   private _config: PoolConfig;
   private _connections: PooledConnection[] = [];
+  private _pendingConnections = 0;
   private _waitQueue: Array<{
     resolve: (conn: Connection) => void;
     reject: (err: Error) => void;
@@ -318,6 +319,13 @@ export class ConnectionPool {
     } catch {
       // Connection is bad, remove it
       await this.removeConnection(pooledConn);
+      await this.fulfillWaiters();
+      return;
+    }
+
+    if (conn.isClosed) {
+      await this.removeConnection(pooledConn);
+      await this.fulfillWaiters();
       return;
     }
 
@@ -328,6 +336,7 @@ export class ConnectionPool {
     const waiter = this._waitQueue.shift();
     if (waiter) {
       pooledConn.inUse = true;
+      pooledConn.lastUsedAt = Date.now();
       waiter.resolve(conn);
     }
   }
@@ -418,26 +427,29 @@ export class ConnectionPool {
    * Add a new connection to the pool with rate limiting and exponential backoff.
    */
   private async addConnection(): Promise<void> {
-    // QUAL-T5: Guard against exceeding maxConnections (e.g. from maintenance loop)
-    if (this._connections.length >= this._maxConnections) {
+    // QUAL-T5: Guard against exceeding maxConnections, including in-flight
+    // connection attempts from concurrent acquires or maintenance.
+    if (this._connections.length + this._pendingConnections >= this._maxConnections) {
       return;
     }
 
-    // Check rate limit
-    if (!this._rateLimiter.isAllowed()) {
-      throw new TransportError({
-        operation: 'connect',
-        cause: new Error('Connection rate limit exceeded'),
-      });
-    }
-
-    // Wait for backoff if there were previous failures
-    await this._rateLimiter.waitForBackoff();
-
-    // Record the attempt
-    this._rateLimiter.recordAttempt();
+    this._pendingConnections++;
 
     try {
+      // Check rate limit
+      if (!this._rateLimiter.isAllowed()) {
+        throw new TransportError({
+          operation: 'connect',
+          cause: new Error('Connection rate limit exceeded'),
+        });
+      }
+
+      // Wait for backoff if there were previous failures
+      await this._rateLimiter.waitForBackoff();
+
+      // Record the attempt
+      this._rateLimiter.recordAttempt();
+
       const conn = await Connection.connect(this._config);
       this._rateLimiter.recordSuccess();
       this._connections.push({
@@ -449,6 +461,8 @@ export class ConnectionPool {
     } catch (e) {
       this._rateLimiter.recordFailure();
       throw e;
+    } finally {
+      this._pendingConnections--;
     }
   }
 
@@ -464,6 +478,29 @@ export class ConnectionPool {
       await pooledConn.connection.close();
     } catch {
       // Ignore close errors
+    }
+  }
+
+  private async fulfillWaiters(): Promise<void> {
+    while (this._waitQueue.length > 0) {
+      const available = this._connections.find((c) => !c.inUse && !c.connection.isClosed);
+      if (available) {
+        available.inUse = true;
+        available.lastUsedAt = Date.now();
+        const waiter = this._waitQueue.shift();
+        waiter?.resolve(available.connection);
+        continue;
+      }
+
+      if (this._connections.length + this._pendingConnections >= this._maxConnections) {
+        return;
+      }
+
+      try {
+        await this.addConnection();
+      } catch {
+        return;
+      }
     }
   }
 
@@ -503,7 +540,7 @@ export class ConnectionPool {
 
     // Ensure minimum connections
     const available = this._connections.filter((c) => !c.connection.isClosed).length;
-    const toCreate = this._minConnections - available;
+    const toCreate = this._minConnections - (available + this._pendingConnections);
     for (let i = 0; i < toCreate; i++) {
       this.addConnection().catch(() => {
         // Ignore creation errors during maintenance
