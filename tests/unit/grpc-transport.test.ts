@@ -96,7 +96,7 @@ vi.mock('../../src/transport.js', () => ({
 }));
 
 import { GrpcTransport } from '../../src/grpc-transport.js';
-import { DriverError } from '../../src/errors.js';
+import { DriverError, StatusClass } from '../../src/errors.js';
 import type { GeodeConfig } from '../../src/config.js';
 
 describe('GrpcTransport security hardening', () => {
@@ -302,6 +302,43 @@ describe('QUAL-A5: gRPC savepoint/rollbackTo errors', () => {
         'Savepoint operations are not supported over gRPC transport'
       );
       expect(driverErr.message).toContain('Use QUIC transport');
+    } finally {
+      await transport.close();
+    }
+  });
+
+  it('locks in the typed savepoint-unsupported error (statusClass SYSTEM/58000, names QUIC)', async () => {
+    // Regression guard: gRPC has no savepoint RPC on the server, so the
+    // transport MUST surface a single typed DriverError whose statusClass is
+    // the SYSTEM class (58000) and whose message directs callers to QUIC.
+    process.env['NODE_ENV'] = 'test';
+    const cfg: GeodeConfig = {
+      host: 'localhost',
+      port: 3141,
+      tls: false,
+      transport: 'grpc',
+    };
+
+    const transport = await GrpcTransport.connect(cfg);
+
+    try {
+      for (const msg of [{ savepoint: { name: 'sp1' } }, { rollbackTo: { name: 'sp1' } }]) {
+        const err = await transport.sendProto(msg).then(
+          () => {
+            throw new Error('expected sendProto to reject');
+          },
+          (e: unknown) => e
+        );
+        expect(err).toBeInstanceOf(DriverError);
+        const driverErr = err as DriverError;
+        // Assert via the typed StatusClass constant, not just the raw string.
+        expect(driverErr.statusClass).toBe(StatusClass.SYSTEM);
+        expect(StatusClass.SYSTEM).toBe('58000');
+        expect(driverErr.code).toBe('58000');
+        // Message must name QUIC as the supported transport.
+        expect(driverErr.message).toContain('not supported over gRPC transport');
+        expect(driverErr.message).toMatch(/QUIC transport \(quic:\/\/\)/);
+      }
     } finally {
       await transport.close();
     }

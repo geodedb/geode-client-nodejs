@@ -60,6 +60,10 @@ export class Transaction {
 
   /**
    * Create a savepoint.
+   *
+   * Savepoints are only supported over the QUIC transport. Over gRPC this
+   * rejects with a {@link DriverError} (statusClass `58000`) directing callers
+   * to use `quic://`.
    */
   async savepoint(name: string, signal?: AbortSignal): Promise<void> {
     this.checkDone();
@@ -69,6 +73,10 @@ export class Transaction {
 
   /**
    * Rollback to a savepoint.
+   *
+   * Savepoints are only supported over the QUIC transport. Over gRPC this
+   * rejects with a {@link DriverError} (statusClass `58000`) directing callers
+   * to use `quic://`.
    */
   async rollbackTo(name: string, signal?: AbortSignal): Promise<void> {
     this.checkDone();
