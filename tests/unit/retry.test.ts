@@ -125,7 +125,7 @@ describe('retry', () => {
         };
         const promise = withRetry(fn, policy);
         // Attach a rejection handler immediately so the eventual rejection is not unhandled.
-        const settled = promise.catch((e) => e);
+        const settled = promise.catch((e: unknown) => e);
 
         // Attempt 1 fails immediately.
         await vi.advanceTimersByTimeAsync(0);
