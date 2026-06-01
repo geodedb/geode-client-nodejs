@@ -95,6 +95,9 @@ export {
   isRetryableError,
 } from './errors.js';
 
+// Retry
+export { type RetryPolicy, defaultRetryPolicy, withRetry } from './retry.js';
+
 // Transport (for advanced usage and testing)
 export {
   type Transport,
