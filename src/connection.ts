@@ -185,8 +185,9 @@ export class Connection {
       this._config.helloName,
       this._config.helloVersion,
       this._config.conformance,
-      undefined, // tenantId
-      this._config.graph
+      this._config.tenant, // tenant_id (proto field 3); set only when provided
+      this._config.graph,
+      this._config.role // FLE role (proto field 8); set only when provided
     );
 
     await this._sendWithTimeout(msg);

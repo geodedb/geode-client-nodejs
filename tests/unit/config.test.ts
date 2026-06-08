@@ -117,6 +117,18 @@ describe('config', () => {
       expect(cfg.insecureSkipVerify).toBe(true);
     });
 
+    // GAP-0841: tenant + role must be parseable from the DSN so they can be
+    // forwarded in the HELLO handshake (multi-tenant + FLE).
+    it('should parse tenant, tenant_id alias, and role query parameters', () => {
+      const cfg = parseDSN('quic://myserver:3141?tenant=tenant-a&role=fle-admin&graph=g1');
+      expect(cfg.tenant).toBe('tenant-a');
+      expect(cfg.role).toBe('fle-admin');
+      expect(cfg.graph).toBe('g1');
+
+      const aliased = parseDSN('quic://myserver:3141?tenant_id=tenant-b');
+      expect(aliased.tenant).toBe('tenant-b');
+    });
+
     describe('insecure_tls_skip_verify parameter', () => {
       it('should parse insecure_tls_skip_verify=true (primary parameter)', () => {
         const cfg = parseDSN('quic://localhost:3141?insecure_tls_skip_verify=true');

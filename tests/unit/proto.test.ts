@@ -47,6 +47,38 @@ describe('proto', () => {
       expect(encoded.length).toBeGreaterThan(0);
     });
 
+    // GAP-0841: HELLO handshake must be able to carry tenant_id (field 3) and
+    // role (field 8) so multi-tenant + FLE work from the Node.js client.
+    it('should carry tenant_id and role in HelloRequest', () => {
+      const msg = buildHelloRequest(
+        'testuser',
+        'testpass',
+        'test-client',
+        '1.0.0',
+        'min',
+        'tenant-a', // tenantId (proto field 3)
+        'mygraph', // graph (proto field 7)
+        'fle-admin' // role (proto field 8)
+      );
+
+      expect(msg.hello?.tenantId).toBe('tenant-a');
+      expect(msg.hello?.graph).toBe('mygraph');
+      expect(msg.hello?.role).toBe('fle-admin');
+
+      // encodeQuicClientMessage runs protobufjs verify() against the loaded
+      // proto schema, so a successful encode proves the proto accepts both
+      // tenant_id and role on the wire.
+      const encoded = encodeQuicClientMessage(msg);
+      expect(encoded).toBeInstanceOf(Buffer);
+      expect(encoded.length).toBeGreaterThan(0);
+    });
+
+    it('should omit tenant_id and role when not provided', () => {
+      const msg = buildHelloRequest('testuser', 'testpass', 'test-client', '1.0.0', 'min');
+      expect(msg.hello?.tenantId).toBeUndefined();
+      expect(msg.hello?.role).toBeUndefined();
+    });
+
     it('should roundtrip ExecuteRequest', () => {
       const msg = buildExecuteRequest('session-123', 'MATCH (n) RETURN n', {
         limit: 10,

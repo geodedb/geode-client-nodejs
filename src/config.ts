@@ -117,6 +117,18 @@ export interface GeodeConfig {
 
   /** Graph name for DSN graph binding. When set, the server binds the session to this graph. */
   graph?: string;
+
+  /**
+   * Tenant identifier sent in the HELLO handshake (proto field 3). Required for
+   * multi-tenant deployments so the server scopes the session to this tenant.
+   */
+  tenant?: string;
+
+  /**
+   * FLE role sent in the HELLO handshake (proto field 8). Selects the
+   * field-level-encryption role for the session when set.
+   */
+  role?: string;
 }
 
 /**
@@ -181,6 +193,9 @@ export function defaultConfig(): GeodeConfig {
  *   - server_name: SNI server name
  *   - connect_timeout: Connection timeout in ms
  *   - request_timeout: Request timeout in ms
+ *   - graph: Graph to bind the session to
+ *   - tenant/tenant_id: Tenant identifier for multi-tenant deployments
+ *   - role: FLE role for field-level access control
  *
  * Environment variables (used as defaults):
  *   - GEODE_HOST: Default host
@@ -188,6 +203,8 @@ export function defaultConfig(): GeodeConfig {
  *   - GEODE_TLS_CA: Default CA certificate path
  *   - GEODE_USERNAME: Default username
  *   - GEODE_PASSWORD: Default password
+ *   - GEODE_TENANT: Default tenant identifier
+ *   - GEODE_ROLE: Default FLE role
  *   - GEODE_TRANSPORT: Default transport type (quic or grpc)
  */
 export function parseDSN(dsn: string): GeodeConfig {
@@ -212,6 +229,12 @@ export function parseDSN(dsn: string): GeodeConfig {
   }
   if (process.env['GEODE_PASSWORD']) {
     cfg.password = process.env['GEODE_PASSWORD'];
+  }
+  if (process.env['GEODE_TENANT']) {
+    cfg.tenant = process.env['GEODE_TENANT'];
+  }
+  if (process.env['GEODE_ROLE']) {
+    cfg.role = process.env['GEODE_ROLE'];
   }
   if (process.env['GEODE_TRANSPORT']) {
     const transport = process.env['GEODE_TRANSPORT'].toLowerCase();
@@ -534,6 +557,15 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
 
       case 'graph':
         cfg.graph = value;
+        break;
+
+      case 'tenant':
+      case 'tenant_id':
+        cfg.tenant = value;
+        break;
+
+      case 'role':
+        cfg.role = value;
         break;
 
       // Ignore unknown parameters for forward compatibility

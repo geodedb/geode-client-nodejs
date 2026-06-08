@@ -637,4 +637,72 @@ describe('Connection', () => {
       ).rejects.toThrow(TransportError);
     });
   });
+
+  // GAP-0841: connect() must forward tenant + role from config into the HELLO
+  // handshake so multi-tenant and FLE work from the Node.js client.
+  describe('hello handshake tenant/role forwarding', () => {
+    it('forwards tenant and role into the HELLO request when configured', async () => {
+      const helloTransport = new MockTransport();
+      helloTransport.queueProtoResponse({
+        hello: {
+          success: true,
+          sessionId: 'session-tenant',
+          errorMessage: '',
+          capabilities: ['gql'],
+        },
+      });
+
+      await Connection.connectWithTransport(
+        {
+          host: 'localhost',
+          port: 3141,
+          pageSize: 100,
+          transport: 'quic',
+          helloName: 'test',
+          helloVersion: '1.0.0',
+          conformance: 'min',
+          tenant: 'tenant-a',
+          role: 'fle-admin',
+          graph: 'mygraph',
+        },
+        helloTransport
+      );
+
+      const sent = helloTransport.getSentProtoMessages();
+      expect(sent.length).toBeGreaterThan(0);
+      const hello = sent[0]?.hello;
+      expect(hello?.tenantId).toBe('tenant-a');
+      expect(hello?.role).toBe('fle-admin');
+      expect(hello?.graph).toBe('mygraph');
+    });
+
+    it('omits tenant and role from the HELLO request when not configured', async () => {
+      const helloTransport = new MockTransport();
+      helloTransport.queueProtoResponse({
+        hello: {
+          success: true,
+          sessionId: 'session-plain',
+          errorMessage: '',
+          capabilities: ['gql'],
+        },
+      });
+
+      await Connection.connectWithTransport(
+        {
+          host: 'localhost',
+          port: 3141,
+          pageSize: 100,
+          transport: 'quic',
+          helloName: 'test',
+          helloVersion: '1.0.0',
+          conformance: 'min',
+        },
+        helloTransport
+      );
+
+      const hello = helloTransport.getSentProtoMessages()[0]?.hello;
+      expect(hello?.tenantId).toBeUndefined();
+      expect(hello?.role).toBeUndefined();
+    });
+  });
 });

@@ -64,6 +64,9 @@ host:port                                          # Simple format (uses QUIC)
 | `hello_name`      | Client name                       | geode-nodejs |
 | `hello_ver`       | Client version                    | 1.0.0        |
 | `conformance`     | GQL conformance level             | min          |
+| `graph`           | Graph to bind the session to      | -            |
+| `tenant`          | Tenant identifier (multi-tenant)  | -            |
+| `role`            | FLE role for field-level access   | -            |
 | `tls`             | Enable TLS (gRPC only)            | true         |
 | `insecure_tls_skip_verify` | Skip TLS verification (dev only)  | false        |
 | `ca`              | Path to CA certificate            | -            |
@@ -83,6 +86,8 @@ host:port                                          # Simple format (uses QUIC)
 | `GEODE_TLS_CA`    | Default CA certificate path    |
 | `GEODE_USERNAME`  | Default username               |
 | `GEODE_PASSWORD`  | Default password               |
+| `GEODE_TENANT`    | Default tenant identifier      |
+| `GEODE_ROLE`      | Default FLE role               |
 
 ### Example Configurations
 

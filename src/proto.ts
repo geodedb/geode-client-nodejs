@@ -26,6 +26,8 @@ export interface HelloRequest {
   clientVersion: string;
   wantedConformance: string;
   graph?: string;
+  /** FLE role for field-level access control (proto field 8). */
+  role?: string;
 }
 
 export interface HelloResponse {
@@ -590,7 +592,8 @@ export function buildHelloRequest(
   clientVersion: string,
   conformance: string,
   tenantId?: string,
-  graph?: string
+  graph?: string,
+  role?: string
 ): QuicClientMessage {
   const helloReq: HelloRequest = {
     username,
@@ -600,6 +603,7 @@ export function buildHelloRequest(
     wantedConformance: conformance,
     ...(tenantId ? { tenantId } : {}),
     ...(graph ? { graph } : {}),
+    ...(role ? { role } : {}),
   };
   return { hello: helloReq };
 }
