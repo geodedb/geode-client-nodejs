@@ -117,6 +117,12 @@ export interface GeodeConfig {
 
   /** Graph name for DSN graph binding. When set, the server binds the session to this graph. */
   graph?: string;
+
+  /** Tenant identifier sent in HELLO (tenant_id). Bound for multi-tenant isolation. */
+  tenant?: string;
+
+  /** FLE role sent in HELLO for field-level access control. */
+  role?: string;
 }
 
 /**
@@ -534,6 +540,15 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
 
       case 'graph':
         cfg.graph = value;
+        break;
+
+      case 'tenant':
+      case 'tenant_id':
+        cfg.tenant = value;
+        break;
+
+      case 'role':
+        cfg.role = value;
         break;
 
       // Ignore unknown parameters for forward compatibility

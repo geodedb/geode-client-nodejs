@@ -494,4 +494,19 @@ describe('proto', () => {
       });
     });
   });
+
+  describe('buildHelloRequest tenant + role', () => {
+    it('encodes tenantId and role into the hello message', () => {
+      const msg = buildHelloRequest('u', 'p', 'cn', 'cv', 'min', 'acme', 'g', 'analyst');
+      expect(msg.hello?.tenantId).toBe('acme');
+      expect(msg.hello?.role).toBe('analyst');
+      expect(msg.hello?.graph).toBe('g');
+    });
+
+    it('omits tenantId and role when not provided', () => {
+      const msg = buildHelloRequest('u', 'p', 'cn', 'cv', 'min');
+      expect(msg.hello?.tenantId).toBeUndefined();
+      expect(msg.hello?.role).toBeUndefined();
+    });
+  });
 });

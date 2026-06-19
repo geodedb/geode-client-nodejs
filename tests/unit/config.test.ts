@@ -482,4 +482,27 @@ describe('config', () => {
       expect(clone.host).toBe('cloned');
     });
   });
+
+  describe('tenant and role DSN params', () => {
+    it('parses ?tenant= into cfg.tenant', () => {
+      const cfg = parseDSN('quic://localhost:3141?tenant=acme');
+      expect(cfg.tenant).toBe('acme');
+    });
+
+    it('parses ?tenant_id= alias into cfg.tenant', () => {
+      const cfg = parseDSN('quic://localhost:3141?tenant_id=acme');
+      expect(cfg.tenant).toBe('acme');
+    });
+
+    it('parses ?role= into cfg.role', () => {
+      const cfg = parseDSN('quic://localhost:3141?role=analyst');
+      expect(cfg.role).toBe('analyst');
+    });
+
+    it('leaves tenant and role undefined when not specified', () => {
+      const cfg = parseDSN('quic://localhost:3141');
+      expect(cfg.tenant).toBeUndefined();
+      expect(cfg.role).toBeUndefined();
+    });
+  });
 });
