@@ -9,6 +9,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Locally-downloaded protoc toolchain (see scripts/install-protoc.sh)
+.tools/
+
 # Coverage
 coverage/
 .nyc_output/
