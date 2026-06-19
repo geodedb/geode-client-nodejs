@@ -209,10 +209,16 @@ export async function explain(
     const payload = execResp.explain;
     const root = parseExplainPayload(payload);
 
+    // The generated bindings decode `est_rows` to camelCase `estRows`; tolerate
+    // the legacy snake_case key as a fallback for callers passing raw payloads.
+    const totals = payload.totals as
+      | { cost?: number; estRows?: number; est_rows?: number }
+      | undefined;
+
     return {
       root,
-      totalCost: payload.totals?.cost,
-      totalRows: payload.totals?.est_rows,
+      totalCost: totals?.cost,
+      totalRows: totals?.estRows ?? totals?.est_rows,
       raw: payload,
     };
   }

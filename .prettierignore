@@ -1,0 +1,6 @@
+# Build output
+dist/
+coverage/
+
+# Generated protobuf bindings (protoc + ts-proto; do not hand-format)
+src/generated/
