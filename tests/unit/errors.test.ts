@@ -10,6 +10,8 @@ import {
   isGeodeError,
   isRetryableError,
   isSentinelError,
+  isAuthError,
+  isSyntaxError,
   ErrClosed,
   ErrQueryInProgress,
   ErrTxInProgress,
@@ -441,6 +443,67 @@ describe('errors', () => {
       expect(isSentinelError(null, ERR_CLOSED_MESSAGE)).toBe(false);
       expect(isSentinelError('string', ERR_CLOSED_MESSAGE)).toBe(false);
       expect(isSentinelError(42, ERR_CLOSED_MESSAGE)).toBe(false);
+    });
+  });
+
+  describe('isAuthError', () => {
+    it('returns true for 28000 auth class', () => {
+      const e = new DriverError({
+        statusClass: StatusClass.AUTH,
+        subclass: '',
+        code: 'AUTH',
+        message: 'no',
+      });
+      expect(isAuthError(e)).toBe(true);
+    });
+
+    it('returns true for 08P01 password reset', () => {
+      const e = new DriverError({
+        statusClass: '08P01' as never,
+        subclass: '',
+        code: 'PWRESET',
+        message: '',
+      });
+      expect(isAuthError(e)).toBe(true);
+    });
+
+    it('returns false for non-auth driver error', () => {
+      const e = new DriverError({
+        statusClass: StatusClass.SYNTAX,
+        subclass: '',
+        code: 'SYN',
+        message: '',
+      });
+      expect(isAuthError(e)).toBe(false);
+    });
+
+    it('returns false for nil and non-driver errors', () => {
+      expect(isAuthError(null)).toBe(false);
+      expect(isAuthError(new TransportError({ operation: 'read' }))).toBe(false);
+    });
+  });
+
+  describe('isSyntaxError', () => {
+    it('returns true for 42000 syntax class', () => {
+      const e = new DriverError({
+        statusClass: StatusClass.SYNTAX,
+        subclass: '',
+        code: 'SYN',
+        message: '',
+      });
+      expect(isSyntaxError(e)).toBe(true);
+    });
+
+    it('returns false for other classes and non-driver errors', () => {
+      const e = new DriverError({
+        statusClass: StatusClass.AUTH,
+        subclass: '',
+        code: 'A',
+        message: '',
+      });
+      expect(isSyntaxError(e)).toBe(false);
+      expect(isSyntaxError(null)).toBe(false);
+      expect(isSyntaxError(new Error('x'))).toBe(false);
     });
   });
 });

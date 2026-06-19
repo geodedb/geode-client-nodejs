@@ -97,6 +97,8 @@ export {
   isDriverError,
   isGeodeError,
   isRetryableError,
+  isAuthError,
+  isSyntaxError,
 } from './errors.js';
 
 // Quoting helpers

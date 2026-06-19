@@ -268,3 +268,26 @@ export function isRetryableError(err: unknown): boolean {
   }
   return false;
 }
+
+/**
+ * Reports whether `err` is a Geode authentication/authorization failure
+ * (GQL status class 28000 or the Geode-specific 08P01 password-reset
+ * extension). Returns false for null and for non-driver errors.
+ */
+export function isAuthError(err: unknown): boolean {
+  if (!isDriverError(err)) {
+    return false;
+  }
+  return err.statusClass === StatusClass.AUTH || (err.statusClass as string) === '08P01';
+}
+
+/**
+ * Reports whether `err` is a GQL parse/syntax error (status class 42000).
+ * Returns false for null and for non-driver errors.
+ */
+export function isSyntaxError(err: unknown): boolean {
+  if (!isDriverError(err)) {
+    return false;
+  }
+  return err.statusClass === StatusClass.SYNTAX;
+}
