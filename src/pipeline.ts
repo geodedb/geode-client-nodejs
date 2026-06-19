@@ -69,7 +69,7 @@ export async function pipelineExec(
     chunks.push(stmts.slice(i, i + chunkSize));
   }
 
-  let firstErr: unknown;
+  let firstErr: Error | undefined;
   let nextChunk = 0;
 
   async function worker(): Promise<void> {
@@ -84,9 +84,7 @@ export async function pipelineExec(
       try {
         await batchExec(pool, chunks[idx]!);
       } catch (err) {
-        if (firstErr === undefined) {
-          firstErr = err;
-        }
+        firstErr ??= err instanceof Error ? err : new Error(String(err));
         return;
       }
     }
