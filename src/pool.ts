@@ -359,6 +359,14 @@ export class ConnectionPool {
   }
 
   /**
+   * Execute a query using a pooled connection and return the first row.
+   * Throws ErrNoRows when the result set is empty.
+   */
+  async queryRow(query: string, options?: QueryOptions): Promise<Record<string, unknown>> {
+    return this.withConnection((conn) => conn.queryRow(query, options), options?.signal);
+  }
+
+  /**
    * Execute a statement that doesn't return rows.
    */
   async exec(query: string, options?: QueryOptions): Promise<void> {

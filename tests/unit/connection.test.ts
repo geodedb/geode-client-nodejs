@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Connection } from '../../src/connection.js';
 import { MockTransport } from '../../src/transport.js';
-import { SecurityError, TransportError } from '../../src/errors.js';
+import { SecurityError, TransportError, ERR_NO_ROWS_MESSAGE } from '../../src/errors.js';
 import { MAX_PAGE_SIZE } from '../../src/config.js';
 
 describe('Connection', () => {
@@ -541,6 +541,19 @@ describe('Connection', () => {
     it('should be idempotent', async () => {
       await connection.close();
       await connection.close(); // Should not throw
+    });
+  });
+
+  describe('queryRow', () => {
+    it('returns the first row when rows exist', async () => {
+      vi.spyOn(connection, 'queryAll').mockResolvedValue([{ n: 1 }, { n: 2 }]);
+      const row = await connection.queryRow('MATCH (n) RETURN n');
+      expect(row).toEqual({ n: 1 });
+    });
+
+    it('throws ErrNoRows when no rows are returned', async () => {
+      vi.spyOn(connection, 'queryAll').mockResolvedValue([]);
+      await expect(connection.queryRow('MATCH (n) RETURN n')).rejects.toThrow(ERR_NO_ROWS_MESSAGE);
     });
   });
 
