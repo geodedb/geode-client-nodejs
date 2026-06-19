@@ -247,5 +247,15 @@ export { defaultRetryPolicy, backoffDelay, retry, type RetryPolicy } from './ret
 // Schema loading
 export { parseSchemaFS, type Statement } from './schema.js';
 
+// Pipeline / batch execution
+export {
+  batchExec,
+  pipelineExec,
+  DEFAULT_CHUNK_SIZE,
+  DEFAULT_MAX_WORKERS,
+  type PipelineExecutor,
+  type PipelineTx,
+} from './pipeline.js';
+
 // Re-export decimal.js-light for type convenience
 export type { default as Decimal } from 'decimal.js-light';
