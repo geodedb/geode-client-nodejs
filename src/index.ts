@@ -244,5 +244,8 @@ export {
 // Retry policy
 export { defaultRetryPolicy, backoffDelay, retry, type RetryPolicy } from './retry.js';
 
+// Schema loading
+export { parseSchemaFS, type Statement } from './schema.js';
+
 // Re-export decimal.js-light for type convenience
 export type { default as Decimal } from 'decimal.js-light';
