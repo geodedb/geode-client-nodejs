@@ -21,6 +21,7 @@ export {
   type TransportType,
   type DSNScheme,
   parseDSN,
+  formatDSN,
   defaultConfig,
   validateConfig,
   getAddress,
@@ -75,6 +76,8 @@ export {
   type ConnectionState,
   StatusClass,
   type StatusClassType,
+  ErrInvalidIdent,
+  ErrInvalidString,
   ErrClosed,
   ErrQueryInProgress,
   ErrTxInProgress,
@@ -82,6 +85,9 @@ export {
   ErrTxDone,
   ErrRowsClosed,
   ErrBadConn,
+  ErrNoRows,
+  ERR_INVALID_IDENT_MESSAGE,
+  ERR_INVALID_STRING_MESSAGE,
   ERR_CLOSED_MESSAGE,
   ERR_QUERY_IN_PROGRESS_MESSAGE,
   ERR_TX_IN_PROGRESS_MESSAGE,
@@ -89,14 +95,20 @@ export {
   ERR_TX_DONE_MESSAGE,
   ERR_ROWS_CLOSED_MESSAGE,
   ERR_BAD_CONN_MESSAGE,
+  ERR_NO_ROWS_MESSAGE,
   isSentinelError,
   isDriverError,
   isGeodeError,
   isRetryableError,
+  isAuthError,
+  isSyntaxError,
 } from './errors.js';
 
 // Retry
 export { type RetryPolicy, defaultRetryPolicy, withRetry } from './retry.js';
+
+// Quoting helpers
+export { quoteIdent, quoteString, sanitizeGraphName } from './quote.js';
 
 // Transport (for advanced usage and testing)
 export {
@@ -232,6 +244,22 @@ export {
   type PullResponse,
   type Status,
 } from './proto.js';
+
+// Schema loading
+export { parseSchemaFS, type Statement } from './schema.js';
+
+// Pipeline / batch execution
+export {
+  batchExec,
+  pipelineExec,
+  DEFAULT_CHUNK_SIZE,
+  DEFAULT_MAX_WORKERS,
+  type PipelineExecutor,
+  type PipelineTx,
+} from './pipeline.js';
+
+// Field-level encryption (FLE)
+export { createCipher, GeodeCipher } from './crypto.js';
 
 // Re-export decimal.js-light for type convenience
 export type { default as Decimal } from 'decimal.js-light';

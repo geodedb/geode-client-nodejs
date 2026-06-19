@@ -192,6 +192,8 @@ export type ConnectionState =
   | 'error';
 
 // Sentinel error messages (stable strings for identity checks)
+export const ERR_INVALID_IDENT_MESSAGE = 'geode: identifier contains forbidden characters';
+export const ERR_INVALID_STRING_MESSAGE = 'geode: string literal contains forbidden characters';
 export const ERR_CLOSED_MESSAGE = 'geode: connection closed';
 export const ERR_QUERY_IN_PROGRESS_MESSAGE = 'geode: query already in progress';
 export const ERR_TX_IN_PROGRESS_MESSAGE = 'geode: transaction already in progress';
@@ -199,9 +201,16 @@ export const ERR_NO_TX_MESSAGE = 'geode: no transaction in progress';
 export const ERR_TX_DONE_MESSAGE = 'geode: transaction already committed or rolled back';
 export const ERR_ROWS_CLOSED_MESSAGE = 'geode: rows closed';
 export const ERR_BAD_CONN_MESSAGE = 'geode: bad connection';
+export const ERR_NO_ROWS_MESSAGE = 'geode: no rows in result set';
 
 // Sentinel error factory functions
 // Each call creates a fresh Error with an accurate stack trace at the throw site.
+export function ErrInvalidIdent(): Error {
+  return new Error(ERR_INVALID_IDENT_MESSAGE);
+}
+export function ErrInvalidString(): Error {
+  return new Error(ERR_INVALID_STRING_MESSAGE);
+}
 export function ErrClosed(): Error {
   return new Error(ERR_CLOSED_MESSAGE);
 }
@@ -222,6 +231,9 @@ export function ErrRowsClosed(): Error {
 }
 export function ErrBadConn(): Error {
   return new Error(ERR_BAD_CONN_MESSAGE);
+}
+export function ErrNoRows(): Error {
+  return new Error(ERR_NO_ROWS_MESSAGE);
 }
 
 /**
@@ -259,4 +271,27 @@ export function isRetryableError(err: unknown): boolean {
     return err.isRetryable;
   }
   return false;
+}
+
+/**
+ * Reports whether `err` is a Geode authentication/authorization failure
+ * (GQL status class 28000 or the Geode-specific 08P01 password-reset
+ * extension). Returns false for null and for non-driver errors.
+ */
+export function isAuthError(err: unknown): boolean {
+  if (!isDriverError(err)) {
+    return false;
+  }
+  return err.statusClass === StatusClass.AUTH || (err.statusClass as string) === '08P01';
+}
+
+/**
+ * Reports whether `err` is a GQL parse/syntax error (status class 42000).
+ * Returns false for null and for non-driver errors.
+ */
+export function isSyntaxError(err: unknown): boolean {
+  if (!isDriverError(err)) {
+    return false;
+  }
+  return err.statusClass === StatusClass.SYNTAX;
 }

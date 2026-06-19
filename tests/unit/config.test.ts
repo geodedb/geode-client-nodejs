@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   parseDSN,
+  formatDSN,
   defaultConfig,
   validateConfig,
   getAddress,
@@ -492,6 +493,27 @@ describe('config', () => {
 
       expect(cfg.host).toBe('original');
       expect(clone.host).toBe('cloned');
+    });
+  });
+
+  describe('formatDSN', () => {
+    it('round-trips a minimal config', () => {
+      const cfg = parseDSN('quic://localhost:3141');
+      const dsn = formatDSN(cfg);
+      expect(parseDSN(dsn)).toEqual(cfg);
+    });
+
+    it('round-trips credentials, graph, tenant, role, and page_size', () => {
+      const cfg = parseDSN(
+        'quic://admin:secret@db.example.com:3141?page_size=500&tenant=acme&role=analyst&graph=g'
+      );
+      const dsn = formatDSN(cfg);
+      expect(parseDSN(dsn)).toEqual(cfg);
+    });
+
+    it('emits scheme matching the transport', () => {
+      const cfg = parseDSN('grpc://localhost:50051');
+      expect(formatDSN(cfg).startsWith('grpc://')).toBe(true);
     });
   });
 });

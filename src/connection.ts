@@ -14,6 +14,7 @@ import {
   ErrClosed,
   ErrQueryInProgress,
   ErrTxInProgress,
+  ErrNoRows,
   type ConnectionState,
 } from './errors.js';
 import type { Transport } from './transport.js';
@@ -360,6 +361,19 @@ export class Connection {
     // without intermediate GQLValue allocation and toJS() conversion.
     // The raw records are already plain JS objects from rowToRecord/protoValueToJS.
     return result._collectRawRecords();
+  }
+
+  /**
+   * Execute a query and return exactly the first row. Throws ErrNoRows when
+   * the result set is empty, mirroring database/sql's ErrNoRows.
+   */
+  async queryRow(query: string, options?: QueryOptions): Promise<Record<string, unknown>> {
+    const rows = await this.queryAll(query, options);
+    const first = rows[0];
+    if (first === undefined) {
+      throw ErrNoRows();
+    }
+    return first;
   }
 
   /** Execute a query that doesn't return rows. */
