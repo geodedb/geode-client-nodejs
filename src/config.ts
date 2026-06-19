@@ -612,6 +612,71 @@ export function getAddress(cfg: GeodeConfig): string {
 }
 
 /**
+ * Serialise a GeodeConfig back to a DSN string. Inverse of parseDSN: only
+ * non-default values are emitted as query parameters to keep the DSN minimal.
+ * Credentials go in the userinfo segment when both username and password are
+ * present; a lone username uses userinfo, a lone password uses a `pass` param.
+ */
+export function formatDSN(cfg: GeodeConfig): string {
+  const scheme = cfg.transport;
+  const host = cfg.host.includes(':') ? `[${cfg.host}]` : cfg.host;
+  const hostPort = `${host}:${cfg.port}`;
+
+  const params = new URLSearchParams();
+  if (cfg.pageSize !== DEFAULT_PAGE_SIZE) {
+    params.set('page_size', String(cfg.pageSize));
+  }
+  if (cfg.helloName && cfg.helloName !== DEFAULT_HELLO_NAME) {
+    params.set('hello_name', cfg.helloName);
+  }
+  if (cfg.helloVersion && cfg.helloVersion !== DEFAULT_HELLO_VERSION) {
+    params.set('hello_ver', cfg.helloVersion);
+  }
+  if (cfg.conformance && cfg.conformance !== DEFAULT_CONFORMANCE) {
+    params.set('conformance', cfg.conformance);
+  }
+  if (cfg.tlsCA) {
+    params.set('ca', cfg.tlsCA);
+  }
+  if (cfg.tlsCert) {
+    params.set('cert', cfg.tlsCert);
+  }
+  if (cfg.tlsKey) {
+    params.set('key', cfg.tlsKey);
+  }
+  if (cfg.insecureSkipVerify) {
+    params.set('insecure_tls_skip_verify', 'true');
+  }
+  if (cfg.serverName) {
+    params.set('server_name', cfg.serverName);
+  }
+  if (cfg.tls === false) {
+    params.set('tls', '0');
+  }
+  if (cfg.graph) {
+    params.set('graph', cfg.graph);
+  }
+  if (cfg.tenant) {
+    params.set('tenant', cfg.tenant);
+  }
+  if (cfg.role) {
+    params.set('role', cfg.role);
+  }
+
+  let userinfo = '';
+  if (cfg.username && cfg.password) {
+    userinfo = `${encodeURIComponent(cfg.username)}:${encodeURIComponent(cfg.password)}@`;
+  } else if (cfg.username) {
+    userinfo = `${encodeURIComponent(cfg.username)}@`;
+  } else if (cfg.password) {
+    params.set('pass', cfg.password);
+  }
+
+  const query = params.toString();
+  return `${scheme}://${userinfo}${hostPort}${query ? `?${query}` : ''}`;
+}
+
+/**
  * Clone configuration.
  */
 export function cloneConfig(cfg: GeodeConfig): GeodeConfig {

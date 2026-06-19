@@ -21,6 +21,7 @@ export {
   type TransportType,
   type DSNScheme,
   parseDSN,
+  formatDSN,
   defaultConfig,
   validateConfig,
   getAddress,

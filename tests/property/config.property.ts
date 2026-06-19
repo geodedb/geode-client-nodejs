@@ -4,9 +4,15 @@
  * Uses fast-check for generating arbitrary inputs to test DSN parsing robustness.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import * as fc from 'fast-check';
-import { parseDSN, validateConfig, defaultConfig, getAddress } from '../../src/config.js';
+import {
+  parseDSN,
+  formatDSN,
+  validateConfig,
+  defaultConfig,
+  getAddress,
+} from '../../src/config.js';
 import { ConfigError } from '../../src/errors.js';
 
 // Helper to generate strings from a character set
@@ -19,6 +25,19 @@ const stringFromChars = (chars: string, opts?: { minLength?: number; maxLength?:
     .map((arr) => arr.join(''));
 
 describe('Config Property Tests', () => {
+  beforeEach(() => {
+    for (const k of [
+      'GEODE_HOST',
+      'GEODE_PORT',
+      'GEODE_TLS_CA',
+      'GEODE_USERNAME',
+      'GEODE_PASSWORD',
+      'GEODE_TRANSPORT',
+    ]) {
+      delete process.env[k];
+    }
+  });
+
   describe('DSN Parsing Robustness', () => {
     it('should not crash on arbitrary strings', () => {
       fc.assert(
@@ -240,6 +259,42 @@ describe('Config Property Tests', () => {
           }
         ),
         { numRuns: 50 }
+      );
+    });
+  });
+
+  describe('formatDSN round-trip', () => {
+    const ident = (min = 1, max = 12) =>
+      fc
+        .array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')), {
+          minLength: min,
+          maxLength: max,
+        })
+        .map((a) => a.join(''));
+
+    it('parse(format(parse(dsn))) deep-equals parse(dsn) for valid configs', () => {
+      fc.assert(
+        fc.property(
+          ident(1, 20), // host label
+          fc.integer({ min: 1, max: 65535 }), // port
+          fc.constantFrom('quic', 'grpc'),
+          fc.integer({ min: 1, max: 100000 }), // page_size
+          fc.option(ident(), { nil: undefined }), // username
+          fc.option(ident(), { nil: undefined }), // tenant
+          fc.option(ident(), { nil: undefined }), // role
+          (host, port, scheme, pageSize, username, tenant, role) => {
+            const parts = [`${scheme}://`];
+            if (username) parts.push(`${username}:pw@`);
+            parts.push(`${host}.local:${port}?page_size=${pageSize}`);
+            if (tenant) parts.push(`&tenant=${tenant}`);
+            if (role) parts.push(`&role=${role}`);
+            const cfg = parseDSN(parts.join(''));
+            const round = parseDSN(formatDSN(cfg));
+            expect(round).toEqual(cfg);
+            return true;
+          }
+        ),
+        { numRuns: 300 }
       );
     });
   });
