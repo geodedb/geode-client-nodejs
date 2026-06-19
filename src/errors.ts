@@ -192,6 +192,8 @@ export type ConnectionState =
   | 'error';
 
 // Sentinel error messages (stable strings for identity checks)
+export const ERR_INVALID_IDENT_MESSAGE = 'geode: identifier contains forbidden characters';
+export const ERR_INVALID_STRING_MESSAGE = 'geode: string literal contains forbidden characters';
 export const ERR_CLOSED_MESSAGE = 'geode: connection closed';
 export const ERR_QUERY_IN_PROGRESS_MESSAGE = 'geode: query already in progress';
 export const ERR_TX_IN_PROGRESS_MESSAGE = 'geode: transaction already in progress';
@@ -202,6 +204,12 @@ export const ERR_BAD_CONN_MESSAGE = 'geode: bad connection';
 
 // Sentinel error factory functions
 // Each call creates a fresh Error with an accurate stack trace at the throw site.
+export function ErrInvalidIdent(): Error {
+  return new Error(ERR_INVALID_IDENT_MESSAGE);
+}
+export function ErrInvalidString(): Error {
+  return new Error(ERR_INVALID_STRING_MESSAGE);
+}
 export function ErrClosed(): Error {
   return new Error(ERR_CLOSED_MESSAGE);
 }

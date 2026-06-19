@@ -75,6 +75,8 @@ export {
   type ConnectionState,
   StatusClass,
   type StatusClassType,
+  ErrInvalidIdent,
+  ErrInvalidString,
   ErrClosed,
   ErrQueryInProgress,
   ErrTxInProgress,
@@ -82,6 +84,8 @@ export {
   ErrTxDone,
   ErrRowsClosed,
   ErrBadConn,
+  ERR_INVALID_IDENT_MESSAGE,
+  ERR_INVALID_STRING_MESSAGE,
   ERR_CLOSED_MESSAGE,
   ERR_QUERY_IN_PROGRESS_MESSAGE,
   ERR_TX_IN_PROGRESS_MESSAGE,
@@ -94,6 +98,9 @@ export {
   isGeodeError,
   isRetryableError,
 } from './errors.js';
+
+// Quoting helpers
+export { quoteIdent, quoteString, sanitizeGraphName } from './quote.js';
 
 // Transport (for advanced usage and testing)
 export {
