@@ -260,3 +260,6 @@ export {
 
 // Re-export decimal.js-light for type convenience
 export type { default as Decimal } from 'decimal.js-light';
+
+// Field-level encryption (FLE)
+export { createCipher, GeodeCipher } from './crypto.js';
