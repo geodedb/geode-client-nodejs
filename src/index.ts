@@ -237,5 +237,8 @@ export {
   type Status,
 } from './proto.js';
 
+// Retry policy
+export { defaultRetryPolicy, backoffDelay, retry, type RetryPolicy } from './retry.js';
+
 // Re-export decimal.js-light for type convenience
 export type { default as Decimal } from 'decimal.js-light';
