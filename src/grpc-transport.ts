@@ -36,10 +36,15 @@ import { type Transport, buildTLSConfig } from './transport.js';
 // Get proto path from proto.ts (which handles CJS/ESM compatibility)
 const PROTO_PATH = getProtoPath();
 
-// Proto loader options
+// Proto loader options.
+//
+// `longs: String` (not Number) is required for int64/uint64 fidelity: Number
+// silently truncates any value above 2^53, which corrupts server-assigned graph
+// ids (ENG-3908). The decimal strings are narrowed back to number/bigint at the
+// JS boundary by protoValueToJS().
 const PROTO_LOADER_OPTIONS: protoLoader.Options = {
   keepCase: false,
-  longs: Number,
+  longs: String,
   enums: Number,
   defaults: true,
   oneofs: true,

@@ -17,9 +17,12 @@
 #   - esModuleInterop=true    : default-import interop for generated helpers
 #   - importSuffix=.js        : emit .js suffixes on relative imports so the
 #                               ESM-only build resolves under NodeNext
-#   - forceLong=number        : int64/uint64 decode to JS number (matches the
-#                               prior protobufjs `longs: Number` behavior and the
-#                               codebase's number/bigint handling in proto.ts)
+#   - forceLong=bigint        : int64/uint64 decode to JS bigint. `number` is NOT
+#                               usable here: ts-proto's longToNumber THROWS for
+#                               any value above 2^53, and server-assigned graph
+#                               ids routinely exceed that (ENG-3908). proto.ts
+#                               narrows bigints back to `number` at the JS
+#                               boundary when they are safe integers.
 #   - outputServices=false    : no gRPC service stubs (wire codec only)
 #   - useOptionals=messages   : message-typed (incl. oneof) fields are optional,
 #                               matching the hand-written interface shape
@@ -69,7 +72,7 @@ fi
 OUT_DIR="$(dirname "$OUT_FILE")"
 mkdir -p "$OUT_DIR"
 
-TS_PROTO_OPTS="esModuleInterop=true,importSuffix=.js,forceLong=number,outputServices=false,useOptionals=messages,snakeToCamel=true,unrecognizedEnum=false"
+TS_PROTO_OPTS="esModuleInterop=true,importSuffix=.js,forceLong=bigint,outputServices=false,useOptionals=messages,snakeToCamel=true,unrecognizedEnum=false"
 
 # protoc emits to <out>/<path-relative-to-proto-root>.ts. We point the proto
 # root at proto/ so it emits geode.ts directly into a temp dir, then move it to

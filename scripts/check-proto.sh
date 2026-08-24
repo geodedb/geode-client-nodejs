@@ -38,7 +38,7 @@ fi
 TMP_OUT="$(mktemp -d)"
 trap 'rm -rf "$TMP_OUT"' EXIT
 
-TS_PROTO_OPTS="esModuleInterop=true,importSuffix=.js,forceLong=number,outputServices=false,useOptionals=messages,snakeToCamel=true,unrecognizedEnum=false"
+TS_PROTO_OPTS="esModuleInterop=true,importSuffix=.js,forceLong=bigint,outputServices=false,useOptionals=messages,snakeToCamel=true,unrecognizedEnum=false"
 
 protoc \
   --plugin="protoc-gen-ts_proto=${PLUGIN}" \

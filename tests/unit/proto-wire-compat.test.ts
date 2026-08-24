@@ -33,11 +33,30 @@ const root = protobuf.loadSync(PROTO_PATH);
 const ClientType = root.lookupType('geode.QuicClientMessage');
 const ServerType = root.lookupType('geode.QuicServerMessage');
 
+/**
+ * protobufjs accepts number | Long | decimal string for 64-bit fields, but not
+ * the bigints the generated bindings use (ts-proto `forceLong=bigint`). Render
+ * bigints as decimal strings so the legacy codec sees the same values; the
+ * encoded bytes are unaffected by the representation.
+ */
+function toLegacyRepr<T>(value: T): unknown {
+  if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Uint8Array || Buffer.isBuffer(value)) return value;
+  if (Array.isArray(value)) return value.map(toLegacyRepr);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, toLegacyRepr(v)]));
+  }
+  return value;
+}
+
 /** Encode a client message via the legacy protobufjs codec. */
 function legacyEncodeClient(msg: QuicClientMessage): Buffer {
-  const err = ClientType.verify(msg);
+  // fromObject() turns the decimal strings into protobufjs' own 64-bit
+  // representation (Long), which verify() accepts.
+  const legacyMsg = ClientType.fromObject(toLegacyRepr(msg) as Record<string, unknown>);
+  const err = ClientType.verify(legacyMsg);
   if (err) throw new Error(`legacy verify failed: ${err}`);
-  return Buffer.from(ClientType.encode(ClientType.create(msg)).finish());
+  return Buffer.from(ClientType.encode(legacyMsg).finish());
 }
 
 /** Encode a server message via the legacy protobufjs codec (length-prefixed body only). */
@@ -130,7 +149,7 @@ describe('proto wire compatibility (ts-proto vs protobufjs)', () => {
     // Backup messages carry session_id / payload fields pulled in from canonical.
     const msg: QuicClientMessage = {
       uploadBackup: {
-        sizeBytes: 3,
+        sizeBytes: 3n,
         checksum: 'abc',
         sessionId: 'sess-1',
         payload: new Uint8Array([1, 2, 3]),

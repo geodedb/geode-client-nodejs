@@ -97,6 +97,21 @@ export interface ExplainOptions extends Omit<QueryOptions, 'pageSize'> {
 }
 
 /**
+ * Narrow a plan/profile metric to a plain `number`.
+ *
+ * int64 metrics decode to `bigint` (ts-proto `forceLong=bigint`) or to a string
+ * over gRPC (`longs: String`); plan estimates and timings are always well
+ * within the double range, and the public QueryPlan/QueryProfile API exposes
+ * them as numbers.
+ */
+function toPlanNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'bigint' || typeof value === 'string') return Number(value);
+  return undefined;
+}
+
+/**
  * Parse plan data from ExplainPayload.
  */
 function parseExplainPayload(payload: ExplainPayload): PlanOperation {
@@ -113,8 +128,8 @@ function parseExplainPayload(payload: ExplainPayload): PlanOperation {
       const opObj = op as Record<string, unknown>;
       return {
         type: (opObj['kind'] as string) || 'Unknown',
-        cost: opObj['cost'] as number | undefined,
-        rows: opObj['est_rows'] as number | undefined,
+        cost: toPlanNumber(opObj['cost']),
+        rows: toPlanNumber(opObj['est_rows'] ?? opObj['estRows']),
         details: { idx: opObj['idx'] },
       };
     }),
@@ -212,13 +227,13 @@ export async function explain(
     // The generated bindings decode `est_rows` to camelCase `estRows`; tolerate
     // the legacy snake_case key as a fallback for callers passing raw payloads.
     const totals = payload.totals as
-      | { cost?: number; estRows?: number; est_rows?: number }
+      | { cost?: unknown; estRows?: unknown; est_rows?: unknown }
       | undefined;
 
     return {
       root,
-      totalCost: totals?.cost,
-      totalRows: totals?.estRows ?? totals?.est_rows,
+      totalCost: toPlanNumber(totals?.cost),
+      totalRows: toPlanNumber(totals?.estRows ?? totals?.est_rows),
       raw: payload,
     };
   }

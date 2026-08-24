@@ -433,6 +433,17 @@ const value = fromJSON({ name: 'Alice', age: 30 });
 | UUID       | string        |
 | JSON/JSONB | any           |
 
+#### 64-bit integers
+
+INT/BIGINT columns and node/edge ids are 64-bit on the wire and decode
+losslessly: a plain `number` when the value fits in the safe-integer range
+(`|v| <= 2^53 - 1`), an exact `bigint` otherwise. Node and edge ids
+(`GQLNode.id`, `GQLEdge.startNode`/`endNode`) are always `bigint`.
+
+> **Note:** `JSON.stringify()` throws `TypeError: Do not know how to serialize a
+> BigInt` on rows containing bigints. Convert first, e.g.
+> `JSON.stringify(row, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))`.
+
 ## Error Handling
 
 ```typescript

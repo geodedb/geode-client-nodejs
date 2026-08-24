@@ -157,6 +157,11 @@ export class QuicTransport extends BaseTransport {
     reject: (error: Error) => void;
   }> = [];
   private _pendingResponses: QuicServerMessage[] = [];
+  /**
+   * Decode failure that arrived while no reader was parked. Surfaced by the
+   * next receiveProto() once the already-decoded backlog has been drained.
+   */
+  private _pendingDecodeError: TransportError | null = null;
 
   constructor(
     address: string,
@@ -406,15 +411,20 @@ export class QuicTransport extends BaseTransport {
           this._pendingResponses.push(msg);
         }
       } catch (err) {
-        // Reject pending reads on decode error
+        const decodeError = new TransportError({
+          operation: 'decode',
+          cause: err instanceof Error ? err : new Error(String(err)),
+        });
+
+        // Reject a parked reader, or latch the error so the next receiveProto()
+        // observes it. Dropping it here would silently stall the caller until
+        // its read timed out (ENG-3908).
         const pending = this._pendingProtoReads.shift();
         if (pending) {
-          pending.reject(
-            new TransportError({
-              operation: 'decode',
-              cause: err instanceof Error ? err : new Error(String(err)),
-            })
-          );
+          pending.reject(decodeError);
+        } else {
+          // Keep the first failure: it is the one that explains the stall.
+          this._pendingDecodeError ??= decodeError;
         }
       }
     }
@@ -486,6 +496,14 @@ export class QuicTransport extends BaseTransport {
       return queued;
     }
 
+    // A frame failed to decode while nothing was parked: report it now rather
+    // than leaving this read to hang forever (ENG-3908).
+    if (this._pendingDecodeError) {
+      const decodeError = this._pendingDecodeError;
+      this._pendingDecodeError = null;
+      throw decodeError;
+    }
+
     return new Promise((resolve, reject) => {
       let onAbort: (() => void) | null = null;
 
@@ -529,6 +547,7 @@ export class QuicTransport extends BaseTransport {
     }
     this._pendingProtoReads = [];
     this._pendingResponses = [];
+    this._pendingDecodeError = null;
     this._chunks = [];
     this._totalLength = 0;
 

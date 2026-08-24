@@ -157,6 +157,36 @@ export function ensureProtoInitialized(): Promise<void> {
   return Promise.resolve();
 }
 
+const MIN_SAFE_BIGINT = BigInt(Number.MIN_SAFE_INTEGER);
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * Narrow a protobuf int64/uint64 field to the JS integer contract: a plain
+ * `number` when the value fits in the safe-integer range, an exact `bigint`
+ * otherwise. Never truncates (see `GQLId` in types.ts).
+ *
+ * Accepts every representation the wire codecs produce: `bigint` from the
+ * generated ts-proto bindings (`forceLong=bigint`), `string` from
+ * @grpc/proto-loader (`longs: String`), and `number` for values that a codec
+ * already narrowed.
+ */
+function protoIntToJS(value: bigint | number | string): number | bigint {
+  if (typeof value === 'number') return value;
+  const n = typeof value === 'bigint' ? value : BigInt(value);
+  if (n >= MIN_SAFE_BIGINT && n <= MAX_SAFE_BIGINT) {
+    return Number(n);
+  }
+  return n;
+}
+
+/**
+ * Convert a protobuf int64/uint64 id field to an exact `bigint`, whatever
+ * representation the transport produced (see {@link protoIntToJS}).
+ */
+function protoIdToBigInt(value: bigint | number | string): bigint {
+  return typeof value === 'bigint' ? value : BigInt(value);
+}
+
 /**
  * Convert a JavaScript value to a protobuf Value message.
  */
@@ -171,13 +201,13 @@ export function jsToProtoValue(value: unknown): ProtoValue {
 
   if (typeof value === 'number') {
     if (Number.isInteger(value)) {
-      return { intVal: { value, kind: 1 } }; // INT
+      return { intVal: { value: BigInt(value), kind: 1 } }; // INT
     }
     return { doubleVal: { value, kind: 1 } }; // DOUBLE
   }
 
   if (typeof value === 'bigint') {
-    return { intVal: { value: value as unknown as number, kind: 3 } }; // BIGINT
+    return { intVal: { value, kind: 3 } }; // BIGINT
   }
 
   if (typeof value === 'string') {
@@ -218,14 +248,7 @@ export function protoValueToJS(val: ProtoValue): unknown {
   if (val.boolVal !== undefined) return val.boolVal;
 
   if (val.intVal !== undefined) {
-    const n = val.intVal.value as number | bigint;
-    if (typeof n === 'bigint') {
-      if (n >= BigInt(Number.MIN_SAFE_INTEGER) && n <= BigInt(Number.MAX_SAFE_INTEGER)) {
-        return Number(n);
-      }
-      return n;
-    }
-    return n;
+    return protoIntToJS(val.intVal.value as bigint | number | string);
   }
 
   if (val.doubleVal !== undefined) return val.doubleVal.value;
@@ -268,7 +291,7 @@ export function protoValueToJS(val: ProtoValue): unknown {
       props[entry.key] = protoValueToJS(entry.value ?? {});
     }
     return {
-      id: typeof node.id === 'bigint' ? node.id : BigInt(node.id),
+      id: protoIdToBigInt(node.id as bigint | number | string),
       labels: node.labels,
       properties: props,
     };
@@ -286,9 +309,9 @@ export function protoValueToJS(val: ProtoValue): unknown {
       props[entry.key] = protoValueToJS(entry.value ?? {});
     }
     return {
-      id: typeof edge.id === 'bigint' ? edge.id : BigInt(edge.id),
-      startNode: typeof edge.fromId === 'bigint' ? edge.fromId : BigInt(edge.fromId),
-      endNode: typeof edge.toId === 'bigint' ? edge.toId : BigInt(edge.toId),
+      id: protoIdToBigInt(edge.id as bigint | number | string),
+      startNode: protoIdToBigInt(edge.fromId as bigint | number | string),
+      endNode: protoIdToBigInt(edge.toId as bigint | number | string),
       type: edge.label,
       properties: props,
     };
@@ -306,7 +329,7 @@ export function protoValueToJS(val: ProtoValue): unknown {
     const ext = val.extVal;
     if (ext.text !== undefined) return ext.text;
     if (ext.bytes !== undefined) return Buffer.from(ext.bytes);
-    if (ext.intVal !== undefined) return ext.intVal;
+    if (ext.intVal !== undefined) return protoIntToJS(ext.intVal as bigint | number | string);
     if (ext.doubleVal !== undefined) return ext.doubleVal;
     if (ext.boolVal !== undefined) return ext.boolVal;
     return null;
@@ -407,13 +430,15 @@ export function buildExecuteRequest(
  * Build a PullRequest message.
  */
 export function buildPullRequest(
-  requestId: number,
+  requestId: number | bigint,
   pageSize: number,
   sessionId: string
 ): QuicClientMessage {
   return {
     pull: {
-      requestId,
+      // The generated binding types request_id (uint64) as bigint; accept a
+      // plain number from callers for API stability.
+      requestId: typeof requestId === 'bigint' ? requestId : BigInt(requestId),
       pageSize,
       sessionId,
     },

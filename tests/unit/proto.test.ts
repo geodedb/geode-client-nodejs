@@ -129,7 +129,8 @@ describe('proto', () => {
 
     it('should convert integer to proto and back', () => {
       const protoVal = jsToProtoValue(42);
-      expect(protoVal.intVal?.value).toBe(42);
+      // int64 fields are carried as bigint by the generated bindings.
+      expect(protoVal.intVal?.value).toBe(42n);
 
       const jsVal = protoValueToJS(protoVal);
       expect(jsVal).toBe(42);

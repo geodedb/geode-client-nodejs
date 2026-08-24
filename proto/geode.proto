@@ -483,7 +483,9 @@ message RollbackToResponse {
 // ============================================================================
 // CDC
 // ============================================================================
-message CdcDiagnosticsRequest {}
+message CdcDiagnosticsRequest {
+  string session_id = 1;
+}
 message CdcDiagnosticsConfig {
   bool enabled = 1;
   uint64 malformed_snapshot_interval = 2;
@@ -536,6 +538,7 @@ message CdcDiagnosticsResponse {
 }
 message CdcControlRequest {
   string action = 1;
+  string session_id = 2;
 }
 message CdcControlResponse {
   bool success = 1;

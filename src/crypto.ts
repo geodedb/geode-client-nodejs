@@ -54,7 +54,7 @@ export class GeodeCipher {
     try {
       return Buffer.concat([decipher.update(data), decipher.final()]);
     } catch (err) {
-      throw new Error(`geode: crypto: decrypt: ${(err as Error).message}`);
+      throw new Error(`geode: crypto: decrypt: ${(err as Error).message}`, { cause: err });
     }
   }
 
