@@ -106,6 +106,18 @@ function dataPageToRows(page: DataPage, columns: ColumnDefinition[]): Record<str
 }
 
 /**
+ * Outcome of the inline read that follows a SCHEMA response.
+ *
+ * `pending` means the inline deadline expired while the response was still in
+ * flight: it has NOT been consumed and the caller must reconcile it before
+ * returning (ENG-3916).
+ */
+type InlineRead =
+  | { status: 'received'; response: ExecutionResponse }
+  | { status: 'empty' }
+  | { status: 'pending' };
+
+/**
  * Connection to a Geode database.
  */
 export class Connection {
@@ -250,26 +262,18 @@ export class Connection {
       const response = await this._receiveWithTimeout(signal);
 
       if (!response.execute) {
-        this._state = this._inTransaction ? 'in_transaction' : 'idle';
-        throw new TransportError({
-          operation: 'query',
-          cause: new Error('Invalid execute response'),
-        });
+        throw await this._protocolDesync('query', 'Invalid execute response');
       }
 
       const execResp = response.execute;
 
       if (isErrorResponse(execResp)) {
-        this._state = this._inTransaction ? 'in_transaction' : 'idle';
+        this._restoreIdleState();
         throw protoErrorToDriverError(execResp, execResp.status?.statusClass);
       }
 
       if (!isSchemaResponse(execResp)) {
-        this._state = this._inTransaction ? 'in_transaction' : 'idle';
-        throw new TransportError({
-          operation: 'query',
-          cause: new Error('Expected schema response'),
-        });
+        throw await this._protocolDesync('query', 'Expected schema response');
       }
 
       this._columns = execResp.schema!.columns;
@@ -281,11 +285,12 @@ export class Connection {
       let isOrdered = false;
       let orderKeys: string[] = [];
 
-      // Try to receive inline data page with short timeout
-      const inlineExec = await this._readInlineExecute(signal);
-      if (inlineExec) {
+      // Read the inline response the server sends after SCHEMA
+      const inline = await this._readInlineExecute('query', signal);
+      if (inline.status === 'received') {
+        const inlineExec = inline.response;
         if (isErrorResponse(inlineExec)) {
-          this._state = this._inTransaction ? 'in_transaction' : 'idle';
+          this._restoreIdleState();
           throw protoErrorToDriverError(inlineExec, inlineExec.status?.statusClass);
         }
         if (isDataPageResponse(inlineExec)) {
@@ -298,37 +303,19 @@ export class Connection {
       }
 
       if (!isFinal && initialRows.length === 0) {
-        // No inline data received - send PULL request to get first page
-        this._requestId++;
+        // No inline data (yet) - send PULL request to get the first page.
         const pageSize = options?.pageSize ?? this._config.pageSize;
         validatePageSize(pageSize);
-        const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
-        await this._sendWithTimeout(pullMsg, signal);
-
-        // Read pull response - server wraps data in pull.response, not execute
-        while (true) {
-          const pullResponse = await this._receiveWithTimeout(signal);
-          const pullExec = pullResponse.pull?.response ?? pullResponse.execute;
-
-          if (!pullExec) {
-            break;
-          }
-          if (isErrorResponse(pullExec)) {
-            this._state = this._inTransaction ? 'in_transaction' : 'idle';
-            throw protoErrorToDriverError(pullExec, pullExec.status?.statusClass);
-          }
-          if (isDataPageResponse(pullExec)) {
-            const page = pullExec.page!;
-            initialRows = dataPageToRows(page, this._columns);
-            isFinal = page.final;
-            isOrdered = page.ordered;
-            orderKeys = page.orderKeys;
-            break;
-          }
-          if (pullExec.heartbeat) {
-            break;
-          }
-        }
+        const pulled = await this._pullFirstPage(
+          'query',
+          pageSize,
+          inline.status === 'pending',
+          signal
+        );
+        initialRows = pulled.rows;
+        isFinal = pulled.final;
+        isOrdered = pulled.ordered;
+        orderKeys = pulled.orderKeys;
       }
 
       // Create result
@@ -349,7 +336,7 @@ export class Connection {
       this._activeResult = result;
       return result;
     } catch (e) {
-      this._state = this._inTransaction ? 'in_transaction' : 'idle';
+      this._restoreIdleState();
       throw e;
     }
   }
@@ -402,10 +389,7 @@ export class Connection {
       const response = await this._receiveWithTimeout(signal);
 
       if (!response.execute) {
-        throw new TransportError({
-          operation: 'exec',
-          cause: new Error('Invalid execute response'),
-        });
+        throw await this._protocolDesync('exec', 'Invalid execute response');
       }
 
       const execResp = response.execute;
@@ -417,8 +401,17 @@ export class Connection {
       // If there's a schema, drain any data pages
       if (isSchemaResponse(execResp)) {
         this._columns = execResp.schema!.columns;
-        const inlineExec = await this._readInlineExecute(signal);
-        if (inlineExec) {
+        const inline = await this._readInlineExecute('exec', signal);
+        if (inline.status === 'pending') {
+          // The inline page is still in flight: reconcile it (and the PULL
+          // that reconciliation sends) before returning, otherwise the next
+          // request on this connection reads it (ENG-3916).
+          const pulled = await this._pullFirstPage('exec', this._config.pageSize, true, signal);
+          if (!pulled.final) {
+            await this._drainRemainingPages(signal);
+          }
+        } else if (inline.status === 'received') {
+          const inlineExec = inline.response;
           if (isErrorResponse(inlineExec)) {
             throw protoErrorToDriverError(inlineExec, inlineExec.status?.statusClass);
           }
@@ -429,7 +422,7 @@ export class Connection {
         }
       }
     } finally {
-      this._state = this._inTransaction ? 'in_transaction' : 'idle';
+      this._restoreIdleState();
     }
   }
 
@@ -453,7 +446,7 @@ export class Connection {
       const execResp = response.pull?.response ?? response.execute;
 
       if (!execResp) {
-        return { rows: [], final: true };
+        throw await this._protocolDesync('fetch_next_page', 'Invalid pull response');
       }
 
       if (isErrorResponse(execResp)) {
@@ -474,42 +467,166 @@ export class Connection {
     }
   }
 
-  /** Try to receive an inline response with short timeout. */
+  /**
+   * Wait for the response the server sends after SCHEMA.
+   *
+   * Returns `null` when the inline deadline (`inlineTimeout`) expires. That
+   * response is then STILL in flight - the caller must reconcile it before
+   * returning, because the transport is a FIFO stream without request/response
+   * correlation and anything left behind is read by the next request
+   * (ENG-3916).
+   */
   private async _tryReceiveInline(signal?: AbortSignal): Promise<QuicServerMessage | null> {
-    if (signal?.aborted) {
-      return null;
-    }
-
     const inlineTimeoutMs = this._config.inlineTimeout ?? 5000;
     const { signal: timeoutSignal, cleanup } = withAbortTimeout(signal, inlineTimeoutMs);
 
     try {
       return await this._transport.receiveProto(timeoutSignal);
     } catch (err) {
-      if (err instanceof TransportError && err.cause?.message === 'Aborted') {
+      const aborted = err instanceof TransportError && err.cause?.message === 'Aborted';
+      if (aborted && !signal?.aborted) {
+        // Only the inline deadline fired; the caller's own abort propagates.
         return null;
       }
+      await this._closeOnTransportError(err);
       throw err;
     } finally {
       cleanup();
     }
   }
 
-  /** Read inline execute responses until a page, error, heartbeat, or timeout arrives. */
-  private async _readInlineExecute(signal?: AbortSignal): Promise<ExecutionResponse | null> {
+  /** Read inline execute responses until a page, error, heartbeat, or the inline deadline. */
+  private async _readInlineExecute(operation: string, signal?: AbortSignal): Promise<InlineRead> {
     while (true) {
       const inlineResponse = await this._tryReceiveInline(signal);
-      const inlineExec = inlineResponse?.execute;
+      if (!inlineResponse) {
+        return { status: 'pending' };
+      }
+      const inlineExec = inlineResponse.execute;
       if (!inlineExec) {
-        return null;
+        // Anything other than an execute response here means the stream is
+        // out of phase with the request that is being served.
+        throw await this._protocolDesync(operation, 'Invalid inline response');
       }
       if (isErrorResponse(inlineExec) || isDataPageResponse(inlineExec)) {
-        return inlineExec;
+        return { status: 'received', response: inlineExec };
       }
       if (inlineExec.heartbeat) {
-        return null;
+        return { status: 'empty' };
       }
     }
+  }
+
+  /**
+   * Send a PULL and consume responses until every outstanding response has
+   * been accounted for.
+   *
+   * The wire protocol is a FIFO stream with no request/response correlation
+   * id, so the client must reconcile the whole exchange before it returns:
+   * a response left in the transport is read by the NEXT request, which then
+   * sees this query's schema and rows (ENG-3916). Up to two responses can be
+   * outstanding here:
+   *
+   *  - the inline page the server sends after SCHEMA, when the inline read
+   *    gave up waiting for it (`inlinePending`), and
+   *  - the answer to the PULL sent below, which QUIC servers always send as a
+   *    `pull`-wrapped message.
+   *
+   * Because the server writes its responses in order, a `pull`-wrapped answer
+   * also proves that nothing is still coming for the EXECUTE, which is what
+   * makes the reconciliation exact.
+   *
+   * When the exchange cannot be reconciled - a timeout, an abort or a
+   * transport failure while a response is still owed - the connection is
+   * closed instead of returned to the caller (and to the pool).
+   *
+   * NOTE (server team, ENG-3916): the durable fix is a request/response
+   * correlation id in the proto. Until the wire protocol carries one, the
+   * client can only reconcile by message type plus stream ordering.
+   */
+  private async _pullFirstPage(
+    operation: string,
+    pageSize: number,
+    inlinePending: boolean,
+    signal?: AbortSignal
+  ): Promise<{
+    rows: Record<string, unknown>[];
+    final: boolean;
+    ordered: boolean;
+    orderKeys: string[];
+  }> {
+    let inlineOutstanding = inlinePending;
+    let ackOutstanding = this._pullIsAcknowledged;
+
+    let rows: Record<string, unknown>[] = [];
+    let final = false;
+    let ordered = false;
+    let orderKeys: string[] = [];
+    let gotPage = false;
+    let deferredError: DriverError | null = null;
+
+    try {
+      this._requestId++;
+      const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
+      await this._sendWithTimeout(pullMsg, signal);
+
+      for (;;) {
+        const response = await this._receiveWithTimeout(signal);
+        const isPullAck = response.pull !== undefined;
+        const pullExec = response.pull?.response ?? response.execute;
+
+        if (!pullExec) {
+          throw await this._protocolDesync(operation, 'Invalid pull response');
+        }
+
+        if (isPullAck) {
+          inlineOutstanding = false;
+          ackOutstanding = false;
+        } else if (inlineOutstanding) {
+          inlineOutstanding = false;
+        } else {
+          // Servers that answer a PULL with a bare execute response.
+          ackOutstanding = false;
+        }
+
+        if (isErrorResponse(pullExec)) {
+          // Only surfaced when no page arrives at all: a result that was fully
+          // delivered inline makes the server answer the trailing PULL with
+          // "no active result set", which must not fail the query.
+          deferredError ??= protoErrorToDriverError(pullExec, pullExec.status?.statusClass);
+        } else if (isDataPageResponse(pullExec)) {
+          const page = pullExec.page!;
+          const pageRows = dataPageToRows(page, this._columns);
+          if (gotPage) {
+            rows = rows.concat(pageRows);
+          } else {
+            rows = pageRows;
+            ordered = page.ordered;
+            orderKeys = page.orderKeys;
+            gotPage = true;
+          }
+          final = final || page.final;
+        }
+
+        if (!inlineOutstanding && !ackOutstanding) {
+          break;
+        }
+      }
+    } catch (e) {
+      if (inlineOutstanding || ackOutstanding) {
+        // Responses are still owed and cannot be matched to a request: the
+        // connection would hand them to whoever uses it next (ENG-3916).
+        await this._forceClose();
+      }
+      throw e;
+    }
+
+    if (deferredError && !gotPage) {
+      this._restoreIdleState();
+      throw deferredError;
+    }
+
+    return { rows, final, ordered, orderKeys };
   }
 
   /** Drain remaining data pages until final=true to prevent query corruption (QUAL-T7). */
@@ -525,7 +642,7 @@ export class Connection {
       const pullExec = response.pull?.response ?? response.execute;
 
       if (!pullExec) {
-        break;
+        throw await this._protocolDesync('exec', 'Invalid pull response');
       }
 
       if (isErrorResponse(pullExec)) {
@@ -808,6 +925,37 @@ export class Connection {
       return;
     }
 
+    await this._forceClose();
+  }
+
+  /**
+   * Whether the server answers every PULL with its own message.
+   *
+   * QUIC servers reply to a PULL with a `pull`-wrapped response, so that
+   * response has to be consumed before the connection is back in phase. The
+   * gRPC transport has no PULL RPC: it serves PULLs from the Execute stream
+   * that is already open, so no extra message is produced.
+   */
+  private get _pullIsAcknowledged(): boolean {
+    return this._config.transport !== 'grpc';
+  }
+
+  /**
+   * Tear the connection down after a protocol desync and build the error.
+   *
+   * The stream carries no correlation ids, so a message that cannot belong to
+   * the request being served means client and server are out of phase: every
+   * later response would answer an earlier request, silently handing one
+   * caller another caller's rows. Failing closed makes the connection
+   * unusable, and the pool drops closed connections instead of reusing them.
+   */
+  private async _protocolDesync(operation: string, detail: string): Promise<TransportError> {
+    await this._forceClose();
+    return new TransportError({ operation, cause: new Error(detail) });
+  }
+
+  /** Close the transport and drop any active result, ignoring teardown errors. */
+  private async _forceClose(): Promise<void> {
     if (this._state === 'closed') {
       return;
     }
@@ -825,5 +973,14 @@ export class Connection {
     } catch {
       // Ignore close errors while tearing down a broken transport.
     }
+  }
+
+  /** Return to the resting state, unless the connection was torn down. */
+  private _restoreIdleState(): void {
+    if (this._state === 'closed') {
+      return;
+    }
+
+    this._state = this._inTransaction ? 'in_transaction' : 'idle';
   }
 }

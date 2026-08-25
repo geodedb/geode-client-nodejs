@@ -439,16 +439,20 @@ describe('Connection', () => {
       // Start query - inline timeout will fire at 50ms, then PULL will be sent
       const queryPromise = connection.queryAll.call(customConnection, 'RETURN 1 AS n');
 
-      // Wait for inline timeout to fire (50ms), then queue PULL response
+      // Wait for inline timeout to fire (50ms), then queue PULL response.
+      // The server answers a PULL with a `pull`-wrapped response (ENG-3916):
+      // that wrapper is what tells the client the exchange is complete.
       await new Promise((r) => setTimeout(r, 80));
 
       customTransport.queueProtoResponse({
-        execute: {
-          page: {
-            rows: [{ values: [{ intVal: { value: 1, kind: 1 } }] }],
-            final: true,
-            ordered: false,
-            orderKeys: [],
+        pull: {
+          response: {
+            page: {
+              rows: [{ values: [{ intVal: { value: 1, kind: 1 } }] }],
+              final: true,
+              ordered: false,
+              orderKeys: [],
+            },
           },
         },
       });
@@ -460,6 +464,26 @@ describe('Connection', () => {
       // The inline timeout should have been ~50ms, not 5000ms
       // Allow generous margin but it should be well under the default 5s
       expect(elapsed).toBeLessThan(3000);
+      expect(customTransport.getSentProtoMessages().some((m) => m.pull !== undefined)).toBe(true);
+
+      // ENG-3916: the connection must still be in phase for the next query.
+      customTransport.queueProtoResponse({
+        execute: { schema: { columns: [{ name: 'label', type: 'STRING' }] } },
+      });
+      customTransport.queueProtoResponse({
+        execute: {
+          page: {
+            rows: [{ values: [{ stringVal: { value: 'next', kind: 1 } }] }],
+            final: true,
+            ordered: false,
+            orderKeys: [],
+          },
+        },
+      });
+
+      const nextRows = await connection.queryAll.call(customConnection, 'RETURN "next" AS label');
+      expect(nextRows).toHaveLength(1);
+      expect(nextRows[0]).toEqual({ label: 'next' });
     });
   });
 

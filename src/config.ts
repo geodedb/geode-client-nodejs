@@ -108,7 +108,17 @@ export interface GeodeConfig {
   /** Maximum idle time in milliseconds (default: 30000) */
   maxIdleTime?: number;
 
-  /** Inline receive timeout in milliseconds (default: 5000) */
+  /**
+   * How long to wait for the data page the server sends inline after SCHEMA
+   * before falling back to an explicit PULL, in milliseconds (default: 5000).
+   * DSN key: `inline_timeout`.
+   *
+   * The inline response is never discarded when this deadline passes: the
+   * client keeps track of it and reconciles it with the PULL answer, so a slow
+   * first page can never leak into the next query (ENG-3916). Lower it only to
+   * make the client fall back to PULL sooner; `requestTimeout` still bounds
+   * the whole exchange.
+   */
   inlineTimeout?: number;
 
   // gRPC-specific options
@@ -551,6 +561,14 @@ function applyQueryParams(params: URLSearchParams, cfg: GeodeConfig): void {
         const n = parseInt(value, 10);
         if (!isNaN(n) && n > 0) {
           cfg.requestTimeout = n;
+        }
+        break;
+      }
+
+      case 'inline_timeout': {
+        const n = parseInt(value, 10);
+        if (!isNaN(n) && n > 0) {
+          cfg.inlineTimeout = n;
         }
         break;
       }

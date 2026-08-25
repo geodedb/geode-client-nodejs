@@ -199,10 +199,13 @@ describe('config', () => {
     });
 
     it('should parse timeout options', () => {
-      const cfg = parseDSN('myserver:3141?connect_timeout=5000&request_timeout=60000');
+      const cfg = parseDSN(
+        'myserver:3141?connect_timeout=5000&request_timeout=60000&inline_timeout=250'
+      );
 
       expect(cfg.connectTimeout).toBe(5000);
       expect(cfg.requestTimeout).toBe(60000);
+      expect(cfg.inlineTimeout).toBe(250);
     });
 
     it('should parse server_name option', () => {

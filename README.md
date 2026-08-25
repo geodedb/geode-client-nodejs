@@ -75,6 +75,7 @@ host:port                                          # Simple format (uses QUIC)
 | `server_name`     | SNI server name                   | -            |
 | `connect_timeout` | Connection timeout (ms)           | 30000        |
 | `request_timeout` | Request timeout (ms)              | 120000       |
+| `inline_timeout`  | Wait for the inline first page before falling back to PULL (ms) | 5000 |
 
 ### Environment Variables
 
