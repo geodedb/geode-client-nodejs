@@ -69,7 +69,7 @@
     "@grpc/proto-loader": "^0.8.0",
     "@matrixai/quic": "^2.0.9",
     "decimal.js-light": "^2.5.1",
-    "protobufjs": "^7.4.0"
+    "protobufjs": "^8.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -84,7 +84,7 @@
     "testcontainers": "^12.0.0",
     "ts-proto": "^2.11.8",
     "tsup": "^8.0.0",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.0",
     "typescript-eslint": "^8.54.0",
     "vitest": "^4.0.18"
   }
