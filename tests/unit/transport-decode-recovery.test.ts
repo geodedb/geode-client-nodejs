@@ -174,3 +174,91 @@ describe('ENG-3908 QuicTransport.processData: undecodable frames must not vanish
     await transport.close();
   });
 });
+
+/**
+ * ENG-3918 (RC-3, transport half).
+ *
+ * `startReading()` (transport.ts:296-329) breaks out of its read loop when the
+ * stream reports `done` or throws, but it never latches `_closed`. The
+ * transport therefore keeps reporting `isClosed() === false`, so
+ * `Connection.isClosed` lies and the pool (whose only liveness predicate is
+ * that flag) keeps the dead connection. Worse, a later `receiveProto()` parks a
+ * reader on a pump that has already exited and waits forever.
+ *
+ * Post-fix: an ended or errored read stream latches the transport closed and
+ * the failure is sticky - the next `receiveProto()` throws instead of hanging.
+ */
+type ReadableInternals = {
+  _stream: unknown;
+  startReading: () => void;
+};
+
+/**
+ * Classify what `receiveProto()` does: settle with a value, reject with a real
+ * transport failure, or hang until the watchdog fires (the ENG-3918 symptom).
+ */
+async function receiveOutcome(transport: QuicTransport): Promise<'resolved' | 'rejected' | 'hung'> {
+  try {
+    await receiveWithin(transport, 200);
+    return 'resolved';
+  } catch (e) {
+    return /did not settle/.test((e as Error).message) ? 'hung' : 'rejected';
+  }
+}
+
+/** Attach a caller-controlled ReadableStream to a QuicTransport's read pump. */
+function attachReadable(transport: QuicTransport): ReadableStreamDefaultController<Uint8Array> {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+
+  const internal = transport as unknown as ReadableInternals;
+  internal._stream = { readable };
+  internal.startReading();
+
+  return controller;
+}
+
+describe('ENG-3918 QuicTransport: a dead read stream must be observable', () => {
+  // Regression: server closed the stream; the transport still claims to be open.
+  it('latches closed when the read stream ends [regression]', async () => {
+    const transport = new QuicTransport('mock:3141');
+    const controller = attachReadable(transport);
+
+    controller.close();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(transport.isClosed()).toBe(true);
+
+    await transport.close();
+  });
+
+  it('fails the next receiveProto instead of parking a reader forever [regression]', async () => {
+    const transport = new QuicTransport('mock:3141');
+    const controller = attachReadable(transport);
+
+    controller.close();
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Today this parks on a pump that already exited and never settles.
+    await expect(receiveOutcome(transport)).resolves.toBe('rejected');
+
+    await transport.close();
+  });
+
+  it('latches closed and stays failed after a read-stream error', async () => {
+    const transport = new QuicTransport('mock:3141');
+    const controller = attachReadable(transport);
+
+    controller.error(new Error('stream reset by peer'));
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(transport.isClosed()).toBe(true);
+    await expect(receiveOutcome(transport)).resolves.toBe('rejected');
+
+    await transport.close();
+  });
+});

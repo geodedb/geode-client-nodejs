@@ -25,6 +25,7 @@ import { ConnectionPool } from '../../src/pool.js';
 import { TransportError } from '../../src/errors.js';
 import type { GeodeConfig, PoolConfig } from '../../src/config.js';
 import type { QuicClientMessage, QuicServerMessage } from '../../src/proto.js';
+import { ScriptedGeodeServer, scriptedConfig } from './helpers/scripted-server.js';
 
 vi.mock('../../src/transport.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/transport.js')>();
@@ -348,5 +349,102 @@ describe('ENG-3916: inline page / PULL desync', () => {
     expect(columnsOf(rows)).toEqual(['a']);
     expect(rows[0]?.['a']).toBe('fast');
     expect(transport.sent.filter((m) => m.pull !== undefined)).toHaveLength(0);
+  });
+});
+
+/**
+ * ENG-3916 (RC-2) / ENG-3918: the server PUSHES every page.
+ *
+ * `quic_connection_handler.zig:7544-7566` streams SCHEMA followed by EVERY data
+ * page as `execute` responses until `final = true`. The client reads exactly ONE
+ * pushed page and then sends a speculative PULL for the rest
+ * (`connection.ts:_fetchNextPage`), so each PULL's real `pull`-wrapped reply is
+ * orphaned in the transport: an N-page result leaves N-1 unread server messages
+ * behind. The connection is then permanently out of phase and the next query
+ * fails with "Invalid execute response" / "Expected schema response".
+ *
+ * The fix is to read the pushed pages until `final = true` (what the reference
+ * Zig client does) and to drain-or-mark-broken when a result is abandoned early.
+ */
+describe('ENG-3916: server-pushed multi-page results', () => {
+  let connection: Connection | null = null;
+
+  afterEach(async () => {
+    if (connection) {
+      await connection.close();
+      connection = null;
+    }
+  });
+
+  // Regression: three pushed pages, read to completion.
+  it('reads every pushed page and leaves nothing unread on the connection [regression]', async () => {
+    const server = new ScriptedGeodeServer([
+      { column: 'a', pages: [['r1', 'r2'], ['r3', 'r4'], ['r5']] },
+      { column: 'b', pages: [['b1']] },
+    ]);
+
+    connection = await Connection.connectWithTransport(scriptedConfig(), server);
+
+    const rows = await connection.queryAll('MATCH (n) RETURN n.name AS a');
+    expect(rows.map((r) => r['a'])).toEqual(['r1', 'r2', 'r3', 'r4', 'r5']);
+
+    // Every server message for that exchange must have been consumed: anything
+    // left over is read by the NEXT request.
+    expect(server.unconsumed).toBe(0);
+
+    // And the connection must still be usable, with its OWN schema and rows.
+    const second = await connection.queryAll('RETURN "b1" AS b');
+    expect(columnsOf(second)).toEqual(['b']);
+    expect(second[0]?.['b']).toBe('b1');
+  });
+
+  it('does not send a speculative PULL for a result the server already pushed', async () => {
+    const server = new ScriptedGeodeServer([
+      {
+        column: 'a',
+        pages: [
+          ['r1', 'r2'],
+          ['r3', 'r4'],
+        ],
+      },
+    ]);
+
+    connection = await Connection.connectWithTransport(scriptedConfig(), server);
+
+    const rows = await connection.queryAll('MATCH (n) RETURN n.name AS a');
+    expect(rows).toHaveLength(4);
+    expect(server.sentKinds.filter((k) => k === 'pull')).toHaveLength(0);
+  });
+
+  // ENG-3918 "Expected schema response": abandoning a result mid-stream leaves
+  // the remaining pushed pages queued on the connection.
+  it('leaves no undrained pages when a multi-page result is abandoned after first() [regression]', async () => {
+    const server = new ScriptedGeodeServer([
+      { column: 'a', pages: [['r1', 'r2'], ['r3', 'r4'], ['r5']] },
+      { column: 'b', pages: [['b1']] },
+    ]);
+
+    connection = await Connection.connectWithTransport(scriptedConfig(), server);
+
+    const result = await connection.query('MATCH (n) RETURN n.name AS a');
+    const first = await result.first();
+    expect(first).not.toBeNull();
+    result.close();
+
+    // After the caller walks away the connection must be self-consistent:
+    // either drained (still usable) or marked broken. A connection that reports
+    // itself healthy while pages are still owed is what poisons the pool.
+    const state = connection.isClosed
+      ? 'broken'
+      : server.unconsumed === 0
+        ? 'drained'
+        : `desynced: ${server.unconsumed} undrained server messages`;
+    expect(state).not.toMatch(/^desynced/);
+
+    if (!connection.isClosed) {
+      const second = await connection.queryAll('RETURN "b1" AS b');
+      expect(columnsOf(second)).toEqual(['b']);
+      expect(second[0]?.['b']).toBe('b1');
+    }
   });
 });
