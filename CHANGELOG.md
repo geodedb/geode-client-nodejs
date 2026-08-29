@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Connection-protocol correctness. Needs a **minor** release: concurrent requests
+on one connection now queue instead of failing fast, which is a behaviour
+change for callers that relied on `ErrQueryInProgress`.
+
+### Changed
+
+- **Concurrent requests on a single `Connection` are serialized, not rejected.**
+  A connection owns one bidirectional stream and the wire protocol carries no
+  request/response correlation id, so overlapping exchanges read each other's
+  answers. Every exchange (`query`, `exec`, `ping`, `begin`, commit, rollback,
+  savepoint, rollback-to and page fetches) now takes a FIFO exchange lock for
+  its full request -> final-response round trip. `Connection.checkState()` no
+  longer throws `ErrQueryInProgress` for a concurrent request; callers queue.
+  `ErrQueryInProgress` remains exported for compatibility but is deprecated and
+  is no longer thrown by the driver.
+- `ConnectionPool.query()` keeps its pooled member checked out for the lifetime
+  of a **streaming** `QueryResult` and releases it when the result closes. A
+  result whose rows are already buffered releases the member immediately, as
+  before.
+- `withAbortTimeout()` aborts its deadline with an explicit reason
+  (`geode:request-timeout`) and its handle exposes `timedOut()`, so a deadline
+  can be told apart from a caller-initiated abort.
+
+### Fixed
+
+- **ENG-3916 / ENG-3918: results larger than one server page desynced the
+  connection.** The server pushes SCHEMA and then EVERY data page as `execute`
+  responses until `final = true` (`quic_connection_handler.zig:7544-7566`) and
+  expects no PULL, but the client read a single page and then sent a
+  speculative PULL for each subsequent page. An N-page result therefore left
+  N-1 pushed pages _and_ every PULL's own reply unread on a stream with no
+  correlation ids. The connection was permanently one or more messages out of
+  phase: the next query failed with "Invalid execute response" /
+  "Expected schema response", and once it stopped failing it silently served
+  the PREVIOUS query's schema and rows - to any caller, including one that got
+  the connection back from the pool. The client now reads the pushed pages, and
+  reserves PULL for the case where the server genuinely parks a result awaiting
+  one (node-scan stream / inline results disabled).
+- **ENG-3916: abandoning a multi-page result left the connection out of phase.**
+  Closing a `QueryResult` early (`first()`, `close()`, `break`) now drains the
+  pages the server still owes - bounded, under the exchange lock the result
+  holds - and tears the connection down if it cannot be brought back in phase.
+- **ENG-3918: a request timeout left a poisoned connection open and pooled.**
+  The request deadline aborts with cause `Aborted`, which
+  `_closeOnTransportError` exempted, so a connection that still owed a response
+  stayed `idle` in the pool and handed the timed-out query's rows to the next
+  caller. Any receive that fails now marks the connection broken.
+- **ENG-3918: `QuicTransport` lied about liveness.** `startReading()` broke out
+  of its read loop when the stream ended or errored but never latched `_closed`,
+  so `isClosed()` reported healthy (the pool's only liveness predicate) and a
+  later `receiveProto()` parked a reader on a pump that had already exited and
+  waited forever. A dead read pump now latches the transport closed and stores a
+  sticky error thrown by the next `receiveProto()`. Already-decoded frames stay
+  readable so in-flight requests are still answered.
+- **ENG-3916: concurrent `sendProto()` calls threw "WritableStream is locked".**
+  QUIC stream writes are serialized on a write chain.
+- `ConnectionPool` evicts broken members at acquire time (in addition to release
+  and maintenance), so a pool at `maxConnections` full of dead connections
+  reconnects on next use instead of blocking until the maintenance tick.
+- `Connection.reset()` takes over an unfinished streaming result's exchange lock
+  and drains its outstanding pages before the connection is reused.
+
 ## [1.2.0] - 2026-08-25
 
 Correctness release: exact int64 handling on the wire and an end to the

@@ -214,6 +214,12 @@ export function ErrInvalidString(): Error {
 export function ErrClosed(): Error {
   return new Error(ERR_CLOSED_MESSAGE);
 }
+/**
+ * @deprecated No longer thrown by `Connection`. Concurrent requests on one
+ * connection are serialized on the connection's exchange lock instead of
+ * failing fast (ENG-3916). Kept exported so existing identity checks still
+ * compile.
+ */
 export function ErrQueryInProgress(): Error {
   return new Error(ERR_QUERY_IN_PROGRESS_MESSAGE);
 }

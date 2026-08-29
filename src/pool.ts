@@ -228,6 +228,12 @@ export class ConnectionPool {
       throw new TransportError({ operation: 'acquire', cause: new Error('Aborted') });
     }
 
+    // Drop members whose connection died (or was desynced and torn down)
+    // before they can be handed out or block a replacement (ENG-3918).
+    // Synchronous on purpose: acquire() must still register its waiter in the
+    // same tick it is called.
+    this.evictBrokenConnections();
+
     // Try to find an available connection
     const available = this._connections.find((c) => !c.inUse && !c.connection.isClosed);
     if (available) {
@@ -355,9 +361,32 @@ export class ConnectionPool {
 
   /**
    * Execute a query using a pooled connection.
+   *
+   * A streaming result keeps fetching pages from the connection it was created
+   * on, so the pooled member stays checked out until the result is closed
+   * (ENG-3916). A result whose rows are already buffered needs nothing further
+   * from the connection and releases the member right away.
    */
   async query(query: string, options?: QueryOptions): Promise<QueryResult> {
-    return this.withConnection((conn) => conn.query(query, options), options?.signal);
+    const conn = await this.acquire(options?.signal);
+
+    let result: QueryResult;
+    try {
+      result = await conn.query(query, options);
+    } catch (e) {
+      await this.release(conn);
+      throw e;
+    }
+
+    if (!result._needsConnection) {
+      await this.release(conn);
+      return result;
+    }
+
+    result._onClose(() => {
+      void this.release(conn);
+    });
+    return result;
   }
 
   /**
@@ -471,6 +500,33 @@ export class ConnectionPool {
       throw e;
     } finally {
       this._pendingConnections--;
+    }
+  }
+
+  /**
+   * Drop every idle member whose connection is no longer usable.
+   *
+   * `Connection.isClosed` is the pool's only liveness predicate, and a
+   * connection torn down after a desync reports closed: leaving those members
+   * in place both risks reuse and starves the pool of its maxConnections slots
+   * until the next maintenance tick (ENG-3918).
+   */
+  private evictBrokenConnections(): void {
+    for (let i = this._connections.length - 1; i >= 0; i--) {
+      const member = this._connections[i];
+      if (member && !member.inUse && member.connection.isClosed) {
+        this._connections.splice(i, 1);
+        void this.closeQuietly(member.connection);
+      }
+    }
+  }
+
+  /** Close a discarded connection, ignoring teardown failures. */
+  private async closeQuietly(conn: Connection): Promise<void> {
+    try {
+      await conn.close();
+    } catch {
+      // Ignore close errors while discarding a broken connection.
     }
   }
 

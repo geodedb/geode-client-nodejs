@@ -162,6 +162,20 @@ export class QuicTransport extends BaseTransport {
    * next receiveProto() once the already-decoded backlog has been drained.
    */
   private _pendingDecodeError: TransportError | null = null;
+  /**
+   * Sticky failure latched when the read pump ends or throws. The pump is the
+   * ONLY producer of responses, so once it is gone nothing can ever settle a
+   * parked reader: report the failure instead of hanging (ENG-3918).
+   */
+  private _readFailure: TransportError | null = null;
+  /** True once close() has released the QUIC client and buffers. */
+  private _disposed = false;
+  /**
+   * Serializes writes to the single bidirectional stream. `getWriter()` throws
+   * "WritableStream is locked" while another write holds the lock, so queued
+   * exchanges must take turns (ENG-3916).
+   */
+  private _writeChain: Promise<void> = Promise.resolve();
 
   constructor(
     address: string,
@@ -297,8 +311,7 @@ export class QuicTransport extends BaseTransport {
         while (!this._closed) {
           const { done, value } = await reader.read();
           if (done) {
-            // Stream ended - reject any pending reads
-            this.rejectPendingReads(
+            this.failFromReadPump(
               new TransportError({
                 operation: 'read',
                 cause: new Error('Stream ended unexpectedly'),
@@ -311,9 +324,8 @@ export class QuicTransport extends BaseTransport {
           }
         }
       } catch (err) {
-        // Stream error - reject any pending reads with the error
         if (!this._closed) {
-          this.rejectPendingReads(
+          this.failFromReadPump(
             new TransportError({
               operation: 'read',
               cause: err instanceof Error ? err : new Error(String(err)),
@@ -326,6 +338,20 @@ export class QuicTransport extends BaseTransport {
     };
 
     void read();
+  }
+
+  /**
+   * Latch the transport dead after the read pump ends or throws.
+   *
+   * Nothing can produce a response once the pump is gone, so leaving
+   * `isClosed()` false makes the connection (and the pool, whose only liveness
+   * predicate is that flag) believe a dead socket is healthy, and parks every
+   * later reader on a producer that will never run again (ENG-3918).
+   */
+  private failFromReadPump(error: TransportError): void {
+    this._readFailure ??= error;
+    this._closed = true;
+    this.rejectPendingReads(error);
   }
 
   /**
@@ -460,18 +486,25 @@ export class QuicTransport extends BaseTransport {
     }
 
     const data = encodeWithLengthPrefix(msg);
+    const stream = this._stream as {
+      writable: WritableStream<Uint8Array>;
+    };
 
-    try {
-      const stream = this._stream as {
-        writable: WritableStream<Uint8Array>;
-      };
-
+    // Queue behind any in-flight write: the WritableStream allows only one
+    // writer at a time, so a concurrent getWriter() throws "WritableStream is
+    // locked" (ENG-3916).
+    const write = this._writeChain.then(async () => {
       const writer = stream.writable.getWriter();
       try {
         await writer.write(new Uint8Array(data));
       } finally {
         writer.releaseLock();
       }
+    });
+    this._writeChain = write.catch(() => undefined);
+
+    try {
+      await write;
     } catch (e) {
       throw new TransportError({
         operation: 'sendProto',
@@ -485,12 +518,12 @@ export class QuicTransport extends BaseTransport {
    * Receive a protobuf message.
    */
   async receiveProto(signal?: AbortSignal): Promise<QuicServerMessage> {
-    this.checkClosed();
-
     if (signal?.aborted) {
       throw new TransportError({ operation: 'receiveProto', cause: new Error('Aborted') });
     }
 
+    // Frames decoded before the pump died still answer requests that were
+    // already in flight, so drain the backlog before reporting the failure.
     const queued = this._pendingResponses.shift();
     if (queued) {
       return queued;
@@ -503,6 +536,13 @@ export class QuicTransport extends BaseTransport {
       this._pendingDecodeError = null;
       throw decodeError;
     }
+
+    // The read pump is gone: no future frame can settle a parked reader.
+    if (this._readFailure) {
+      throw this._readFailure;
+    }
+
+    this.checkClosed();
 
     return new Promise((resolve, reject) => {
       let onAbort: (() => void) | null = null;
@@ -538,7 +578,11 @@ export class QuicTransport extends BaseTransport {
   }
 
   async close(): Promise<void> {
-    if (this._closed) return;
+    // `_closed` is also latched when the read pump dies, so resource release is
+    // tracked separately: otherwise a latched-dead transport would never
+    // destroy its QUIC client.
+    if (this._disposed) return;
+    this._disposed = true;
     this._closed = true;
 
     // Reject pending reads and clear buffers
@@ -548,6 +592,7 @@ export class QuicTransport extends BaseTransport {
     this._pendingProtoReads = [];
     this._pendingResponses = [];
     this._pendingDecodeError = null;
+    this._readFailure = null;
     this._chunks = [];
     this._totalLength = 0;
 
