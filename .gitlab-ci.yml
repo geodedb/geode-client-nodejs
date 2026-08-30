@@ -94,7 +94,9 @@ include:
   - component: gitlab.com/devnw/ci-catalog/node-publish@v1.48.0
     inputs:
       stage: publish
-      node_version: '22'
+      # node 24: the component upgrades to npm@12 for OIDC publishing, which
+      # requires node >=22.22.2 / >=24.15.0; the node:22 image lags at 22.22.0
+      node_version: '24'
       package_scope: '@geodedb'
       access: 'public'
       environment: 'npm-publish'
