@@ -4,7 +4,7 @@
  * Connection management and query execution using protobuf wire protocol.
  */
 
-import { withAbortTimeout } from './abort-utils.js';
+import { withAbortTimeout, type AbortHandle } from './abort-utils.js';
 import type { GeodeConfig } from './config.js';
 import { validateConfig } from './config.js';
 import {
@@ -12,7 +12,6 @@ import {
   TransportError,
   StatusClass,
   ErrClosed,
-  ErrQueryInProgress,
   ErrTxInProgress,
   ErrNoRows,
   type ConnectionState,
@@ -118,6 +117,25 @@ type InlineRead =
   | { status: 'pending' };
 
 /**
+ * How the server delivers the pages that follow the first one.
+ *
+ * `push`  the server streams every page as an `execute` response until
+ *         `final = true` and expects NO PULL (the normal path,
+ *         `quic_connection_handler.zig:7544-7566`).
+ * `pull`  the server parked the result and answers one page per PULL (the
+ *         node-scan stream path with inline results disabled).
+ */
+type PageDelivery = 'push' | 'pull';
+
+/**
+ * Upper bound on the pages drained from an abandoned result. Draining keeps the
+ * connection in phase, but an unbounded drain would let a huge result set stall
+ * a caller that already walked away, so past this point the connection is torn
+ * down instead (CWE-400).
+ */
+const MAX_DRAIN_PAGES = 4096;
+
+/**
  * Connection to a Geode database.
  */
 export class Connection {
@@ -129,6 +147,22 @@ export class Connection {
   private _requestId = 0;
   private _sessionId = '';
   private _columns: ColumnDefinition[] = [];
+  private _delivery: PageDelivery = 'push';
+
+  /**
+   * FIFO exchange lock.
+   *
+   * The connection owns ONE bidirectional stream and the wire protocol carries
+   * no request/response correlation id, so two overlapping exchanges would read
+   * each other's answers. Callers therefore queue instead of racing: an
+   * exchange holds the lock for its FULL request -> final-response round trip,
+   * and a streaming QueryResult keeps holding it until it is closed or drained
+   * (ENG-3916).
+   */
+  private _exchangeHeld = false;
+  private _exchangeWaiters: Array<() => void> = [];
+  /** Lock release handed to the active streaming result, if any. */
+  private _activeRelease: (() => void) | null = null;
 
   private constructor(config: GeodeConfig, transport: Transport) {
     this._config = config;
@@ -188,6 +222,60 @@ export class Connection {
   /** Get session ID. */
   get sessionId(): string {
     return this._sessionId;
+  }
+
+  /**
+   * Take the exchange lock, returning its (idempotent) release function.
+   *
+   * Registration is synchronous, so waiters are served strictly in call order.
+   */
+  private acquireExchange(): Promise<() => void> {
+    let released = false;
+    const release = (): void => {
+      if (released) {
+        return;
+      }
+      released = true;
+      const next = this._exchangeWaiters.shift();
+      if (next) {
+        next();
+        return;
+      }
+      this._exchangeHeld = false;
+    };
+
+    if (!this._exchangeHeld) {
+      this._exchangeHeld = true;
+      return Promise.resolve(release);
+    }
+
+    return new Promise<() => void>((resolve) => {
+      this._exchangeWaiters.push(() => resolve(release));
+    });
+  }
+
+  /** Run one complete exchange under the connection's exchange lock. */
+  private async withExchange<T>(fn: () => Promise<T>): Promise<T> {
+    const release = await this.acquireExchange();
+    try {
+      if (this._state === 'closed') {
+        throw ErrClosed();
+      }
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  /** Wake every queued exchange so it can observe the closed state. */
+  private drainExchangeWaiters(): void {
+    const waiters = this._exchangeWaiters;
+    this._exchangeWaiters = [];
+    this._exchangeHeld = false;
+    this._activeRelease = null;
+    for (const wake of waiters) {
+      wake();
+    }
   }
 
   /** Perform the HELLO handshake. */
@@ -251,7 +339,17 @@ export class Connection {
       validatePageSize(options.pageSize);
     }
 
+    const resultPageSize = options?.pageSize ?? this._config.pageSize;
+    validatePageSize(resultPageSize);
+
+    const release = await this.acquireExchange();
+    let handedOver = false;
+
     try {
+      if (this._state === 'closed') {
+        throw ErrClosed();
+      }
+
       this._state = 'fetching';
 
       // Send Execute request
@@ -284,6 +382,7 @@ export class Connection {
       let isFinal = false;
       let isOrdered = false;
       let orderKeys: string[] = [];
+      let gotPushedPage = false;
 
       // Read the inline response the server sends after SCHEMA
       const inline = await this._readInlineExecute('query', signal);
@@ -299,16 +398,22 @@ export class Connection {
           isFinal = page.final;
           isOrdered = page.ordered;
           orderKeys = page.orderKeys;
+          gotPushedPage = true;
         }
       }
 
-      if (!isFinal && initialRows.length === 0) {
-        // No inline data (yet) - send PULL request to get the first page.
-        const pageSize = options?.pageSize ?? this._config.pageSize;
-        validatePageSize(pageSize);
+      if (gotPushedPage) {
+        // The server pushed a page, so it pushes the REST of them too, until
+        // final = true. Sending a PULL here would orphan every remaining
+        // pushed page on a stream with no correlation ids (ENG-3916).
+        this._delivery = 'push';
+      } else {
+        // Nothing was pushed: the server parked the result awaiting a PULL
+        // (node-scan stream / inline results disabled).
+        this._delivery = 'pull';
         const pulled = await this._pullFirstPage(
           'query',
-          pageSize,
+          resultPageSize,
           inline.status === 'pending',
           signal
         );
@@ -317,10 +422,6 @@ export class Connection {
         isOrdered = pulled.ordered;
         orderKeys = pulled.orderKeys;
       }
-
-      // Create result
-      const resultPageSize = options?.pageSize ?? this._config.pageSize;
-      validatePageSize(resultPageSize);
 
       const result = new QueryResult(
         this,
@@ -334,10 +435,22 @@ export class Connection {
       );
 
       this._activeResult = result;
+
+      if (!isFinal) {
+        // The server still owes pages: the result keeps the exchange lock so
+        // nothing else can read them off the stream (ENG-3916 RC-1/RC-5).
+        this._activeRelease = release;
+        handedOver = true;
+      }
+
       return result;
     } catch (e) {
       this._restoreIdleState();
       throw e;
+    } finally {
+      if (!handedOver) {
+        release();
+      }
     }
   }
 
@@ -378,52 +491,57 @@ export class Connection {
 
     const signal = options?.signal;
 
-    try {
-      this._state = 'executing';
+    return this.withExchange(async () => {
+      try {
+        this._state = 'executing';
 
-      // Send Execute request
-      const msg = buildExecuteRequest(this._sessionId, query, params);
-      await this._sendWithTimeout(msg, signal);
+        // Send Execute request
+        const msg = buildExecuteRequest(this._sessionId, query, params);
+        await this._sendWithTimeout(msg, signal);
 
-      // Read response
-      const response = await this._receiveWithTimeout(signal);
+        // Read response
+        const response = await this._receiveWithTimeout(signal);
 
-      if (!response.execute) {
-        throw await this._protocolDesync('exec', 'Invalid execute response');
-      }
+        if (!response.execute) {
+          throw await this._protocolDesync('exec', 'Invalid execute response');
+        }
 
-      const execResp = response.execute;
+        const execResp = response.execute;
 
-      if (isErrorResponse(execResp)) {
-        throw protoErrorToDriverError(execResp, execResp.status?.statusClass);
-      }
+        if (isErrorResponse(execResp)) {
+          throw protoErrorToDriverError(execResp, execResp.status?.statusClass);
+        }
 
-      // If there's a schema, drain any data pages
-      if (isSchemaResponse(execResp)) {
-        this._columns = execResp.schema!.columns;
-        const inline = await this._readInlineExecute('exec', signal);
-        if (inline.status === 'pending') {
-          // The inline page is still in flight: reconcile it (and the PULL
-          // that reconciliation sends) before returning, otherwise the next
-          // request on this connection reads it (ENG-3916).
-          const pulled = await this._pullFirstPage('exec', this._config.pageSize, true, signal);
-          if (!pulled.final) {
-            await this._drainRemainingPages(signal);
-          }
-        } else if (inline.status === 'received') {
-          const inlineExec = inline.response;
-          if (isErrorResponse(inlineExec)) {
-            throw protoErrorToDriverError(inlineExec, inlineExec.status?.statusClass);
-          }
-          // QUAL-T7: Drain remaining pages if the inline response is not final
-          if (isDataPageResponse(inlineExec) && !inlineExec.page!.final) {
-            await this._drainRemainingPages(signal);
+        // If there's a schema, drain any data pages
+        if (isSchemaResponse(execResp)) {
+          this._columns = execResp.schema!.columns;
+          const inline = await this._readInlineExecute('exec', signal);
+          if (inline.status === 'pending') {
+            // The inline page is still in flight: reconcile it (and the PULL
+            // that reconciliation sends) before returning, otherwise the next
+            // request on this connection reads it (ENG-3916).
+            this._delivery = 'pull';
+            const pulled = await this._pullFirstPage('exec', this._config.pageSize, true, signal);
+            if (!pulled.final) {
+              await this._drainRemainingPages(signal);
+            }
+          } else if (inline.status === 'received') {
+            const inlineExec = inline.response;
+            if (isErrorResponse(inlineExec)) {
+              throw protoErrorToDriverError(inlineExec, inlineExec.status?.statusClass);
+            }
+            // QUAL-T7: the server pushes the remaining pages; read them all so
+            // the connection is back in phase before exec() returns.
+            if (isDataPageResponse(inlineExec) && !inlineExec.page!.final) {
+              this._delivery = 'push';
+              await this._drainRemainingPages(signal);
+            }
           }
         }
+      } finally {
+        this._restoreIdleState();
       }
-    } finally {
-      this._restoreIdleState();
-    }
+    });
   }
 
   /** @internal Fetch the next page of results. Called by QueryResult. */
@@ -435,18 +553,44 @@ export class Connection {
     final: boolean;
   }> {
     validatePageSize(pageSize);
+
+    // The server PUSHES every page of a result it started delivering inline
+    // (`quic_connection_handler.zig:7544-7566`) and expects no PULL. Sending
+    // one anyway orphans the pushed pages AND the PULL's own reply on a stream
+    // with no correlation ids, which desyncs the connection for good
+    // (ENG-3916 / ENG-3918).
+    if (this._delivery === 'push') {
+      return this._readNextPage('fetch_next_page', signal);
+    }
+
     this._requestId++;
     const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
     await this._sendWithTimeout(pullMsg, signal);
 
-    while (true) {
-      const response = await this._receiveWithTimeout(signal);
+    return this._readNextPage('fetch_next_page', signal);
+  }
 
-      // Server sends pull data in pull.response, not execute
+  /**
+   * Read the next page off the stream.
+   *
+   * Accepts either envelope: the server pushes pages as `execute` responses and
+   * wraps a PULL's answer in `pull`. Anything else means the stream is out of
+   * phase with the request being served, so the connection fails closed instead
+   * of silently swallowing the message.
+   */
+  private async _readNextPage(
+    operation: string,
+    signal?: AbortSignal
+  ): Promise<{
+    rows: Record<string, unknown>[];
+    final: boolean;
+  }> {
+    for (;;) {
+      const response = await this._receiveWithTimeout(signal);
       const execResp = response.pull?.response ?? response.execute;
 
       if (!execResp) {
-        throw await this._protocolDesync('fetch_next_page', 'Invalid pull response');
+        throw await this._protocolDesync(operation, 'Invalid page response');
       }
 
       if (isErrorResponse(execResp)) {
@@ -462,6 +606,19 @@ export class Connection {
       }
 
       if (execResp.heartbeat) {
+        return { rows: [], final: true };
+      }
+
+      if (isSchemaResponse(execResp)) {
+        // A schema belongs to a DIFFERENT statement: reading on would hand
+        // this caller another query's rows.
+        throw await this._protocolDesync(operation, 'Unexpected schema response');
+      }
+
+      if (!execResp.metrics && !execResp.explain && !execResp.profile) {
+        // Status-only response: the server's terminal acknowledgement for a
+        // statement that produces no further rows (mirrors the reference client,
+        // `src/client/quic_query_runner.zig:216-233`).
         return { rows: [], final: true };
       }
     }
@@ -629,40 +786,59 @@ export class Connection {
     return { rows, final, ordered, orderKeys };
   }
 
-  /** Drain remaining data pages until final=true to prevent query corruption (QUAL-T7). */
+  /**
+   * Drain remaining data pages until final=true to prevent query corruption
+   * (QUAL-T7). Honours the current delivery mode: pushed pages are read,
+   * parked results are pulled one page at a time.
+   */
   private async _drainRemainingPages(signal?: AbortSignal): Promise<void> {
-    let done = false;
-    while (!done) {
-      this._requestId++;
-      const pageSize = this._config.pageSize;
-      const pullMsg = buildPullRequest(this._requestId, pageSize, this._sessionId);
-      await this._sendWithTimeout(pullMsg, signal);
-
-      const response = await this._receiveWithTimeout(signal);
-      const pullExec = response.pull?.response ?? response.execute;
-
-      if (!pullExec) {
-        throw await this._protocolDesync('exec', 'Invalid pull response');
-      }
-
-      if (isErrorResponse(pullExec)) {
-        throw protoErrorToDriverError(pullExec, pullExec.status?.statusClass);
-      }
-
-      if (isDataPageResponse(pullExec)) {
-        done = pullExec.page!.final;
-      } else if (pullExec.heartbeat) {
-        done = true;
+    for (let page = 0; page < MAX_DRAIN_PAGES; page++) {
+      const { final } = await this._fetchNextPage(this._config.pageSize, signal);
+      if (final) {
+        return;
       }
     }
+
+    throw await this._protocolDesync('drain', 'Result exceeded the drain page limit');
   }
 
-  /** @internal Release the active result, returning the connection to idle. */
-  _releaseResult(result: QueryResult): void {
-    if (this._activeResult === result) {
-      this._activeResult = null;
-      this._state = this._inTransaction ? 'in_transaction' : 'idle';
+  /**
+   * @internal Release the active result, returning the connection to idle.
+   *
+   * A result abandoned before `final = true` leaves pages the server still owes
+   * on the stream. They are drained here - under the exchange lock the result
+   * still holds - so the next caller cannot read them as its own (ENG-3916).
+   * The returned promise settles once the connection is back in phase.
+   */
+  _releaseResult(result: QueryResult, final: boolean): Promise<void> {
+    if (this._activeResult !== result) {
+      return Promise.resolve();
     }
+
+    this._activeResult = null;
+    const release = this._activeRelease;
+    this._activeRelease = null;
+    this._restoreIdleState();
+
+    if (!release) {
+      return Promise.resolve();
+    }
+
+    if (final || this._state === 'closed') {
+      release();
+      return Promise.resolve();
+    }
+
+    return this._drainRemainingPages()
+      .catch(async (e: unknown) => {
+        // The stream could not be brought back in phase: a connection that
+        // still owes responses must never be reused (or pooled).
+        await this._forceClose();
+        void e;
+      })
+      .finally(() => {
+        release();
+      });
   }
 
   /** Begin a transaction. */
@@ -673,57 +849,66 @@ export class Connection {
       throw ErrTxInProgress();
     }
 
-    const msg = buildBeginRequest(false, this._sessionId);
-    await this._sendWithTimeout(msg, signal);
+    return this.withExchange(async () => {
+      const msg = buildBeginRequest(false, this._sessionId);
+      await this._sendWithTimeout(msg, signal);
 
-    const response = await this._receiveWithTimeout(signal);
+      const response = await this._receiveWithTimeout(signal);
 
-    if (response.begin) {
-      if (response.begin.sessionId) {
-        this._sessionId = response.begin.sessionId;
+      if (response.begin) {
+        if (response.begin.sessionId) {
+          this._sessionId = response.begin.sessionId;
+        }
+      } else {
+        throw new TransportError({
+          operation: 'begin',
+          cause: new Error('Invalid BEGIN response'),
+        });
       }
-    } else {
-      throw new TransportError({
-        operation: 'begin',
-        cause: new Error('Invalid BEGIN response'),
-      });
-    }
 
-    this._inTransaction = true;
-    this._state = 'in_transaction';
+      this._inTransaction = true;
+      this._state = 'in_transaction';
 
-    return new Transaction(this);
+      return new Transaction(this);
+    });
   }
 
   /** @internal Commit the current transaction. Called by Transaction. */
   async _commit(signal?: AbortSignal): Promise<void> {
-    const msg = buildCommitRequest(this._sessionId);
-    await this._sendWithTimeout(msg, signal);
+    return this.withExchange(async () => {
+      const msg = buildCommitRequest(this._sessionId);
+      await this._sendWithTimeout(msg, signal);
 
-    const response = await this._receiveWithTimeout(signal);
+      const response = await this._receiveWithTimeout(signal);
 
-    if (!response.commit) {
-      throw new TransportError({
-        operation: 'commit',
-        cause: new Error('Invalid COMMIT response'),
-      });
-    }
+      if (!response.commit) {
+        throw new TransportError({
+          operation: 'commit',
+          cause: new Error('Invalid COMMIT response'),
+        });
+      }
 
-    if (!response.commit.success) {
-      throw new DriverError({
-        statusClass: StatusClass.TRANSACTION_STATE,
-        subclass: '000',
-        code: 'CommitFailed',
-        message: 'Commit failed',
-      });
-    }
+      if (!response.commit.success) {
+        throw new DriverError({
+          statusClass: StatusClass.TRANSACTION_STATE,
+          subclass: '000',
+          code: 'CommitFailed',
+          message: 'Commit failed',
+        });
+      }
 
-    this._inTransaction = false;
-    this._state = 'idle';
+      this._inTransaction = false;
+      this._state = 'idle';
+    });
   }
 
   /** @internal Rollback the current transaction. Called by Transaction. */
   async _rollback(signal?: AbortSignal): Promise<void> {
+    return this.withExchange(() => this._rollbackExchange(signal));
+  }
+
+  /** Send ROLLBACK and consume its answer. The exchange lock must be held. */
+  private async _rollbackExchange(signal?: AbortSignal): Promise<void> {
     const msg = buildRollbackRequest(this._sessionId);
     await this._sendWithTimeout(msg, signal);
 
@@ -744,52 +929,56 @@ export class Connection {
   async _savepoint(name: string, signal?: AbortSignal): Promise<void> {
     validateSavepointName(name);
 
-    const msg = buildSavepointRequest(name, this._sessionId);
-    await this._sendWithTimeout(msg, signal);
+    return this.withExchange(async () => {
+      const msg = buildSavepointRequest(name, this._sessionId);
+      await this._sendWithTimeout(msg, signal);
 
-    const response = await this._receiveWithTimeout(signal);
+      const response = await this._receiveWithTimeout(signal);
 
-    if (!response.savepoint) {
-      throw new TransportError({
-        operation: 'savepoint',
-        cause: new Error('Invalid SAVEPOINT response'),
-      });
-    }
+      if (!response.savepoint) {
+        throw new TransportError({
+          operation: 'savepoint',
+          cause: new Error('Invalid SAVEPOINT response'),
+        });
+      }
 
-    if (!response.savepoint.success) {
-      throw new DriverError({
-        statusClass: StatusClass.TRANSACTION_STATE,
-        subclass: '000',
-        code: 'SavepointFailed',
-        message: `Failed to create savepoint: ${name}`,
-      });
-    }
+      if (!response.savepoint.success) {
+        throw new DriverError({
+          statusClass: StatusClass.TRANSACTION_STATE,
+          subclass: '000',
+          code: 'SavepointFailed',
+          message: `Failed to create savepoint: ${name}`,
+        });
+      }
+    });
   }
 
   /** @internal Rollback to a previously created savepoint. Called by Transaction. */
   async _rollbackTo(name: string, signal?: AbortSignal): Promise<void> {
     validateSavepointName(name);
 
-    const msg = buildRollbackToRequest(name, this._sessionId);
-    await this._sendWithTimeout(msg, signal);
+    return this.withExchange(async () => {
+      const msg = buildRollbackToRequest(name, this._sessionId);
+      await this._sendWithTimeout(msg, signal);
 
-    const response = await this._receiveWithTimeout(signal);
+      const response = await this._receiveWithTimeout(signal);
 
-    if (!response.rollbackTo) {
-      throw new TransportError({
-        operation: 'rollback_to',
-        cause: new Error('Invalid ROLLBACK TO response'),
-      });
-    }
+      if (!response.rollbackTo) {
+        throw new TransportError({
+          operation: 'rollback_to',
+          cause: new Error('Invalid ROLLBACK TO response'),
+        });
+      }
 
-    if (!response.rollbackTo.success) {
-      throw new DriverError({
-        statusClass: StatusClass.TRANSACTION_STATE,
-        subclass: '000',
-        code: 'RollbackToFailed',
-        message: `Failed to rollback to savepoint: ${name}`,
-      });
-    }
+      if (!response.rollbackTo.success) {
+        throw new DriverError({
+          statusClass: StatusClass.TRANSACTION_STATE,
+          subclass: '000',
+          code: 'RollbackToFailed',
+          message: `Failed to rollback to savepoint: ${name}`,
+        });
+      }
+    });
   }
 
   /** Ping the server to check connection health. */
@@ -798,24 +987,26 @@ export class Connection {
       throw ErrClosed();
     }
 
-    const msg = buildPingRequest();
-    await this._sendWithTimeout(msg, signal);
+    return this.withExchange(async () => {
+      const msg = buildPingRequest();
+      await this._sendWithTimeout(msg, signal);
 
-    const response = await this._receiveWithTimeout(signal);
+      const response = await this._receiveWithTimeout(signal);
 
-    if (!response.ping) {
-      throw new TransportError({
-        operation: 'ping',
-        cause: new Error('Invalid PING response'),
-      });
-    }
+      if (!response.ping) {
+        throw new TransportError({
+          operation: 'ping',
+          cause: new Error('Invalid PING response'),
+        });
+      }
 
-    if (!response.ping.ok) {
-      throw new TransportError({
-        operation: 'ping',
-        cause: new Error('Server returned not ok'),
-      });
-    }
+      if (!response.ping.ok) {
+        throw new TransportError({
+          operation: 'ping',
+          cause: new Error('Server returned not ok'),
+        });
+      }
+    });
   }
 
   /** Reset the connection session. */
@@ -824,13 +1015,33 @@ export class Connection {
       throw ErrClosed();
     }
 
-    // Rollback any active transaction
-    if (this._inTransaction) {
-      await this._rollback(signal);
+    // Take over the exchange lock an unfinished streaming result is holding:
+    // its outstanding pages must be drained before the connection is reused.
+    const retained = this._activeRelease;
+    this._activeRelease = null;
+    if (this._activeResult) {
+      this._activeResult._close();
+      this._activeResult = null;
     }
 
-    this._state = 'idle';
-    this._activeResult = null;
+    const release = retained ?? (await this.acquireExchange());
+    try {
+      if (this.isClosed) {
+        throw ErrClosed();
+      }
+      if (retained) {
+        await this._drainRemainingPages(signal);
+      }
+      if (this._inTransaction) {
+        await this._rollbackExchange(signal);
+      }
+      this._state = 'idle';
+    } catch (e) {
+      await this._forceClose();
+      throw e;
+    } finally {
+      release();
+    }
   }
 
   /** Close the connection. */
@@ -840,14 +1051,23 @@ export class Connection {
     }
 
     this._state = 'closed';
+    this._abandonActiveResult();
+    this.drainExchangeWaiters();
 
-    // Close active result
+    await this._transport.close();
+  }
+
+  /** Drop the active result and hand its exchange lock back. */
+  private _abandonActiveResult(): void {
     if (this._activeResult) {
       this._activeResult._close();
       this._activeResult = null;
     }
-
-    await this._transport.close();
+    const release = this._activeRelease;
+    this._activeRelease = null;
+    if (release) {
+      release();
+    }
   }
 
   /** Create a prepared statement. */
@@ -874,14 +1094,15 @@ export class Connection {
     return doBatch(this, queries, options);
   }
 
-  /** Check connection state before operation. */
+  /**
+   * Check connection state before operation.
+   *
+   * Concurrent requests are NOT rejected any more: they queue on the exchange
+   * lock (ENG-3916). Only genuinely illegal states fail fast here.
+   */
   private checkState(operation: string): void {
     if (this._state === 'closed') {
       throw ErrClosed();
-    }
-
-    if (this._state === 'fetching' || this._activeResult) {
-      throw ErrQueryInProgress();
     }
 
     if (operation === 'begin' && this._inTransaction) {
@@ -891,37 +1112,52 @@ export class Connection {
 
   /** Send a protobuf message with request timeout enforcement. */
   private async _sendWithTimeout(msg: QuicClientMessage, signal?: AbortSignal): Promise<void> {
-    const { signal: timeoutSignal, cleanup } = this._withRequestTimeout(signal);
+    const handle = this._withRequestTimeout(signal);
     try {
-      await this._transport.sendProto(msg, timeoutSignal);
+      await this._transport.sendProto(msg, handle.signal);
     } catch (e) {
-      await this._closeOnTransportError(e);
+      await this._closeOnTransportError(e, handle.timedOut());
       throw e;
     } finally {
-      cleanup();
+      handle.cleanup();
     }
   }
 
   /** Receive a protobuf message with request timeout enforcement. */
   private async _receiveWithTimeout(signal?: AbortSignal): Promise<QuicServerMessage> {
-    const { signal: timeoutSignal, cleanup } = this._withRequestTimeout(signal);
+    const handle = this._withRequestTimeout(signal);
     try {
-      return await this._transport.receiveProto(timeoutSignal);
+      return await this._transport.receiveProto(handle.signal);
     } catch (e) {
-      await this._closeOnTransportError(e);
+      // A failed receive always leaves a response owed on a stream that carries
+      // no correlation ids, so the connection is unusable either way: a
+      // deadline abort is just as poisonous as a transport fault (ENG-3918).
+      await this._closeOnTransportError(e, true);
       throw e;
     } finally {
-      cleanup();
+      handle.cleanup();
     }
   }
 
   /** Create a combined abort signal from requestTimeout and optional caller signal (CWE-703). */
-  private _withRequestTimeout(signal?: AbortSignal): { signal?: AbortSignal; cleanup: () => void } {
+  private _withRequestTimeout(signal?: AbortSignal): AbortHandle {
     return withAbortTimeout(signal, this._config.requestTimeout);
   }
 
-  private async _closeOnTransportError(err: unknown): Promise<void> {
-    if (!(err instanceof TransportError) || err.cause?.message === 'Aborted') {
+  /**
+   * Tear the connection down after a transport failure.
+   *
+   * `responseOwed` marks the cases where the server may still answer: a request
+   * deadline that elapsed, or any aborted receive. Those leave the stream out
+   * of phase, so the connection must not be reused (or returned to the pool)
+   * even though the underlying socket is still open (ENG-3918).
+   */
+  private async _closeOnTransportError(err: unknown, responseOwed = false): Promise<void> {
+    if (!(err instanceof TransportError)) {
+      return;
+    }
+
+    if (err.cause?.message === 'Aborted' && !responseOwed) {
       return;
     }
 
@@ -963,10 +1199,8 @@ export class Connection {
     this._state = 'closed';
     this._inTransaction = false;
 
-    if (this._activeResult) {
-      this._activeResult._close();
-      this._activeResult = null;
-    }
+    this._abandonActiveResult();
+    this.drainExchangeWaiters();
 
     try {
       await this._transport.close();

@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ConnectionPool } from '../../src/pool.js';
 import type { PoolConfig } from '../../src/config.js';
-import type { Connection } from '../../src/connection.js';
+import { Connection } from '../../src/connection.js';
 import { TransportError } from '../../src/errors.js';
+import { ScriptedGeodeServer, scriptedConfig, sleep } from './helpers/scripted-server.js';
 
 describe('ConnectionPool', () => {
   let pool: ConnectionPool | null = null;
@@ -1015,5 +1016,160 @@ describe('ConnectionPool', () => {
 
       expect(connections[0]?.inUse).toBe(false);
     });
+  });
+});
+
+/**
+ * ENG-3918 (RC-3) + ENG-3916 (RC-5): pool liveness and streaming ownership.
+ *
+ * The pool's ONLY liveness predicate is `Connection.isClosed`
+ * (pool.ts:232,:326,:494,:543). A connection desynced by a request timeout is
+ * still open, so it is handed straight back out and the next caller silently
+ * receives the previous query's rows. And `pool.query()` (pool.ts:359-361)
+ * releases the member as soon as `conn.query()` resolves, while the streaming
+ * QueryResult still needs that very connection to fetch its remaining pages.
+ */
+interface PooledMember {
+  connection: Connection;
+  createdAt: number;
+  lastUsedAt: number;
+  inUse: boolean;
+}
+
+const membersOf = (pool: ConnectionPool): PooledMember[] =>
+  (pool as unknown as { _connections: PooledMember[] })._connections;
+
+const poolConfig = (overrides: Partial<PoolConfig> = {}): PoolConfig => ({
+  host: 'localhost',
+  port: 3141,
+  transport: 'quic',
+  pageSize: 100,
+  helloName: 'test',
+  helloVersion: '1.0.0',
+  conformance: 'min',
+  minConnections: 0,
+  maxConnections: 1,
+  acquireTimeout: 300,
+  connectTimeout: 250,
+  ...overrides,
+});
+
+/**
+ * A real Connection that has been desynced by a request timeout: the server's
+ * late answer is queued on its stream, but the connection is still open and
+ * therefore still looks healthy to the pool.
+ */
+async function desyncedConnection(): Promise<Connection> {
+  const server = new ScriptedGeodeServer([
+    { column: 'slow', pages: [['s1']], schemaDelayMs: 300 },
+    { column: 'next', pages: [['n1']] },
+  ]);
+  const conn = await Connection.connectWithTransport(
+    scriptedConfig({ requestTimeout: 50, connectTimeout: 250 }),
+    server
+  );
+  await conn.queryAll('RETURN "s1" AS slow').catch(() => undefined);
+  await sleep(400); // the stalled answer now sits unread on the stream
+  return conn;
+}
+
+describe('ENG-3918: pool must evict connections broken by a timed-out exchange', () => {
+  let pool: ConnectionPool | null = null;
+
+  afterEach(async () => {
+    if (pool) {
+      await pool.close();
+      pool = null;
+    }
+  });
+
+  // Regression: a desynced member released back into the pool is reused.
+  it('evicts a broken connection on release [regression]', async () => {
+    pool = new ConnectionPool(poolConfig());
+    const conn = await desyncedConnection();
+    membersOf(pool).push({
+      connection: conn,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+      inUse: true,
+    });
+
+    await pool.release(conn);
+
+    expect(pool.stats.total).toBe(0);
+  });
+
+  it('never hands a broken connection back out on acquire [regression]', async () => {
+    pool = new ConnectionPool(poolConfig());
+    const conn = await desyncedConnection();
+    membersOf(pool).push({
+      connection: conn,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+      inUse: false,
+    });
+
+    // Either a fresh connection or a loud failure - but never the broken one.
+    const acquired = await pool.acquire().catch((e: unknown) => e);
+
+    expect(acquired).not.toBe(conn);
+  });
+
+  it('removes a broken connection during maintenance', async () => {
+    pool = new ConnectionPool(poolConfig());
+    const conn = await desyncedConnection();
+    membersOf(pool).push({
+      connection: conn,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+      inUse: false,
+    });
+
+    (pool as unknown as { maintenance: () => void }).maintenance();
+    await sleep(50);
+
+    expect(membersOf(pool)).toHaveLength(0);
+  });
+});
+
+describe('ENG-3916: pool.query must keep the member until the result is closed', () => {
+  let pool: ConnectionPool | null = null;
+
+  afterEach(async () => {
+    if (pool) {
+      await pool.close();
+      pool = null;
+    }
+  });
+
+  // Regression: withConnection releases the member while the QueryResult is
+  // still streaming from it, so another caller can interleave on that stream.
+  it('holds the pooled member in use for the lifetime of a streaming result [regression]', async () => {
+    pool = new ConnectionPool(poolConfig());
+    const server = new ScriptedGeodeServer([
+      { column: 'a', pages: [['r1', 'r2'], ['r3', 'r4'], ['r5']] },
+    ]);
+    const conn = await Connection.connectWithTransport(scriptedConfig(), server);
+    membersOf(pool).push({
+      connection: conn,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+      inUse: false,
+    });
+
+    const result = await pool.query('MATCH (n) RETURN n.name AS a');
+
+    // The result still owns the connection: the pool must not lend it out.
+    expect(pool.stats.inUse).toBe(1);
+    expect(pool.stats.available).toBe(0);
+
+    const rows = await result.toArray();
+    expect(rows).toHaveLength(5);
+
+    result.close();
+    await sleep(0);
+
+    expect(pool.stats.inUse).toBe(0);
+    expect(pool.stats.available).toBe(1);
   });
 });

@@ -23,6 +23,10 @@ export class QueryResult implements AsyncIterable<Row> {
   private _closed = false;
   private _bufferIndex = 0;
   private _rowCount = 0;
+  /** Settles once the connection is back in phase after this result closed. */
+  private _drained: Promise<void> | null = null;
+  /** Owner hook (used by the pool to hold its member for the result's life). */
+  private _onCloseHooks: Array<() => void> = [];
 
   constructor(
     conn: Connection,
@@ -126,7 +130,9 @@ export class QueryResult implements AsyncIterable<Row> {
         this._final = final;
       }
     } finally {
-      this.close();
+      // Abandoning the iteration early (break / return / throw) lands here, so
+      // this is where the pages the server still owes get drained.
+      await this._settle();
     }
   }
 
@@ -166,7 +172,7 @@ export class QueryResult implements AsyncIterable<Row> {
 
       return records;
     } finally {
-      this.close();
+      await this._settle();
     }
   }
 
@@ -261,13 +267,54 @@ export class QueryResult implements AsyncIterable<Row> {
 
   /**
    * Close the result set.
+   *
+   * When the server still owes pages, closing hands the connection the job of
+   * draining them; use {@link QueryResult._settle} (or simply iterate to the
+   * end) to await that. A caller that walks away never observes a connection
+   * that is silently out of phase (ENG-3916).
    */
   close(): void {
     if (this._closed) {
       return;
     }
     this._closed = true;
-    this._conn._releaseResult(this);
+    this._drained = this._conn._releaseResult(this, this._final);
+    void this._drained.catch(() => undefined);
+    const hooks = this._onCloseHooks;
+    this._onCloseHooks = [];
+    for (const hook of hooks) {
+      hook();
+    }
+  }
+
+  /**
+   * @internal Whether the result still needs the connection.
+   *
+   * False once every page is buffered client-side: the connection is then free
+   * and its pool member can be released immediately.
+   */
+  get _needsConnection(): boolean {
+    return !this._final && !this._closed;
+  }
+
+  /**
+   * @internal Register a callback fired exactly once when this result closes.
+   * Fires immediately when the result is already closed.
+   */
+  _onClose(hook: () => void): void {
+    if (this._closed) {
+      hook();
+      return;
+    }
+    this._onCloseHooks.push(hook);
+  }
+
+  /** Close the result and wait for the connection to be back in phase. */
+  private async _settle(): Promise<void> {
+    this.close();
+    if (this._drained) {
+      await this._drained.catch(() => undefined);
+    }
   }
 
   /**
@@ -275,6 +322,11 @@ export class QueryResult implements AsyncIterable<Row> {
    */
   _close(): void {
     this._closed = true;
+    const hooks = this._onCloseHooks;
+    this._onCloseHooks = [];
+    for (const hook of hooks) {
+      hook();
+    }
   }
 }
 

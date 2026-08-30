@@ -312,11 +312,11 @@ export async function batchMap(
  * Unlike the sequential batch(), this executes multiple queries concurrently
  * up to the specified limit.
  *
- * **Important:** A single `Connection` can only execute one query at a time
- * (the connection state machine throws `ErrQueryInProgress` for concurrent
- * queries). When a single connection is provided with concurrency > 1, this
- * function automatically falls back to sequential execution (concurrency=1)
- * to prevent runtime errors.
+ * **Important:** A single `Connection` owns one bidirectional stream and can
+ * only execute one query at a time; concurrent requests queue on its exchange
+ * lock rather than overlapping (ENG-3916). When a single connection is
+ * provided with concurrency > 1, this function falls back to sequential
+ * execution (concurrency=1) because the extra concurrency buys nothing.
  *
  * For true parallel execution, use a connection pool or connection factory
  * that provides separate connections per concurrent query.
@@ -334,10 +334,9 @@ export async function batchParallel(
   queries: BatchQuery[],
   options?: BatchOptions & { concurrency: number }
 ): Promise<BatchSummary> {
-  // QUAL-A1: A single Connection cannot handle concurrent queries because
-  // Connection.checkState() throws ErrQueryInProgress when state is 'fetching'
-  // or an activeResult exists. Clamp concurrency to 1 for single connections
-  // to prevent runtime errors.
+  // QUAL-A1: a single Connection serializes every exchange on its one stream,
+  // so concurrency > 1 would just queue. Clamp it to 1 and keep the call
+  // sequential.
   const requestedConcurrency = options?.concurrency ?? 5;
   const concurrency = Math.max(1, Math.min(requestedConcurrency, 1));
 

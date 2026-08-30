@@ -1,8 +1,15 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Connection } from '../../src/connection.js';
 import { MockTransport } from '../../src/transport.js';
 import { SecurityError, TransportError, ERR_NO_ROWS_MESSAGE } from '../../src/errors.js';
 import { MAX_PAGE_SIZE } from '../../src/config.js';
+import {
+  ScriptedGeodeServer,
+  scriptedConfig,
+  columnsOf,
+  sleep,
+  type PushScript,
+} from './helpers/scripted-server.js';
 
 describe('Connection', () => {
   let transport: MockTransport;
@@ -741,5 +748,202 @@ describe('Connection', () => {
       expect(hello?.tenantId).toBeUndefined();
       expect(hello?.role).toBeUndefined();
     });
+  });
+});
+
+/**
+ * ENG-3916 (RC-1): a Connection owns ONE bidirectional stream with no
+ * request/response correlation, but nothing serializes the exchanges on it.
+ * `checkState` only guards `fetching`/`_activeResult`; `exec` sets
+ * `_state = 'executing'` (connection.ts:382) and `ping`/`_commit`/`_rollback`/
+ * `_savepoint`/`_rollbackTo` are unguarded, so two callers can interleave a
+ * request/response pair on the same stream. On the real QUIC transport the
+ * second concurrent `sendProto` also throws "WritableStream is locked"
+ * (transport.ts:451-482).
+ *
+ * The fix queues exchanges (an async mutex covering the FULL request ->
+ * final-response round trip) instead of failing fast, so callers that share a
+ * connection are serialized rather than rejected or interleaved.
+ */
+describe('ENG-3916: per-connection exchange serialization', () => {
+  let connection: Connection | null = null;
+
+  afterEach(async () => {
+    if (connection) {
+      await connection.close();
+      connection = null;
+    }
+  });
+
+  // Regression: four concurrent queries on ONE connection must all complete.
+  it('serializes four concurrent queryAll calls on one connection [regression]', async () => {
+    const scripts: PushScript[] = [
+      { column: 'c0', pages: [['v0']] },
+      { column: 'c1', pages: [['v1']] },
+      { column: 'c2', pages: [['v2']] },
+      { column: 'c3', pages: [['v3']] },
+    ];
+    const server = new ScriptedGeodeServer(scripts);
+    const conn = await Connection.connectWithTransport(scriptedConfig(), server);
+    connection = conn;
+
+    const settled = await Promise.allSettled(
+      scripts.map((s) => conn.queryAll(`RETURN "${s.pages[0]![0]!}" AS ${s.column}`))
+    );
+
+    const failures = settled
+      .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      .map((r) => (r.reason as Error).message);
+    expect(failures).toEqual([]);
+
+    // Every scripted answer must have been delivered exactly once, each with
+    // its own column and value (order-independent).
+    const delivered = settled
+      .filter(
+        (r): r is PromiseFulfilledResult<Record<string, unknown>[]> => r.status === 'fulfilled'
+      )
+      .map((r) => {
+        const rows = r.value;
+        const column = columnsOf(rows)[0];
+        return `${column ?? '<none>'}=${String(rows[0]?.[column ?? ''])}`;
+      })
+      .sort();
+    expect(delivered).toEqual(['c0=v0', 'c1=v1', 'c2=v2', 'c3=v3']);
+    expect(server.unconsumed).toBe(0);
+    expect(connection.isClosed).toBe(false);
+  });
+
+  it('serializes a concurrent exec and query instead of interleaving them', async () => {
+    const server = new ScriptedGeodeServer([
+      { column: 'created', pages: [['ok']] },
+      { column: 'b', pages: [['b1']] },
+    ]);
+    connection = await Connection.connectWithTransport(scriptedConfig(), server);
+
+    const execPromise = connection.exec('CREATE (n:Thing)');
+    const queryPromise = connection.queryAll('RETURN "b1" AS b');
+    const [execResult, queryResult] = await Promise.allSettled([execPromise, queryPromise]);
+
+    expect(execResult.status).toBe('fulfilled');
+    expect(queryResult.status).toBe('fulfilled');
+    if (queryResult.status === 'fulfilled') {
+      // The query must get its OWN schema and rows, never the exec's.
+      expect(columnsOf(queryResult.value)).toEqual(['b']);
+      expect(queryResult.value[0]?.['b']).toBe('b1');
+    }
+    expect(server.unconsumed).toBe(0);
+  });
+
+  it('serializes a ping issued while a query is in flight', async () => {
+    const server = new ScriptedGeodeServer([{ column: 'a', pages: [['a1']] }]);
+    connection = await Connection.connectWithTransport(scriptedConfig(), server);
+
+    const queryPromise = connection.queryAll('RETURN "a1" AS a');
+    const pingPromise = connection.ping();
+    const [query, ping] = await Promise.allSettled([queryPromise, pingPromise]);
+
+    expect(ping.status).toBe('fulfilled');
+    expect(query.status).toBe('fulfilled');
+    if (query.status === 'fulfilled') {
+      expect(columnsOf(query.value)).toEqual(['a']);
+      expect(query.value[0]?.['a']).toBe('a1');
+    }
+    expect(server.unconsumed).toBe(0);
+  });
+});
+
+/**
+ * ENG-3918 (RC-3): `_closeOnTransportError` (connection.ts:923-929) exempts
+ * every error whose cause message is 'Aborted', and the request-timeout signal
+ * built by `withAbortTimeout` (abort-utils.ts:43) aborts with exactly that
+ * cause. A request that times out therefore leaves the connection open, `idle`
+ * and one exchange behind: the server's late answer is still queued on the
+ * stream and is handed to the NEXT caller, who silently receives the PREVIOUS
+ * query's schema and rows.
+ *
+ * The fix latches a sticky broken flag on a timed-out exchange (a caller abort
+ * is a different case) so the connection fails loud instead of leaking.
+ */
+describe('ENG-3918: a timed-out exchange must not leak into the next query', () => {
+  let connection: Connection | null = null;
+
+  afterEach(async () => {
+    if (connection) {
+      await connection.close();
+      connection = null;
+    }
+  });
+
+  // Regression: proven silent cross-query data leakage.
+  it('never serves a later query the timed-out query’s rows [regression]', async () => {
+    const scripts: PushScript[] = [
+      { column: 'slow', pages: [['s1']], schemaDelayMs: 400 },
+      { column: 'next', pages: [['n1']] },
+      { column: 'third', pages: [['t1']] },
+    ];
+    const server = new ScriptedGeodeServer(scripts);
+    connection = await Connection.connectWithTransport(
+      scriptedConfig({ requestTimeout: 100 }),
+      server
+    );
+
+    // 1. The first query times out while the server is still stalled.
+    await expect(connection.queryAll('RETURN "s1" AS slow')).rejects.toThrow(TransportError);
+
+    // 2. The server finally answers; its response queues on the connection.
+    await sleep(600);
+
+    // 3. Every later query must either fail loud or return its OWN data.
+    const outcomes: Array<{ script: PushScript; rows?: Record<string, unknown>[] }> = [];
+    for (const script of scripts.slice(1)) {
+      try {
+        const rows = await connection.queryAll(`RETURN "x" AS ${script.column}`);
+        outcomes.push({ script, rows });
+      } catch {
+        outcomes.push({ script });
+      }
+    }
+
+    for (const outcome of outcomes) {
+      if (!outcome.rows) {
+        continue;
+      }
+      expect(columnsOf(outcome.rows)).toEqual([outcome.script.column]);
+      expect(outcome.rows[0]?.[outcome.script.column]).toBe(outcome.script.pages[0]![0]);
+    }
+  });
+
+  it('marks the connection unusable after a request timeout', async () => {
+    const server = new ScriptedGeodeServer([
+      { column: 'slow', pages: [['s1']], schemaDelayMs: 400 },
+      { column: 'next', pages: [['n1']] },
+    ]);
+    connection = await Connection.connectWithTransport(
+      scriptedConfig({ requestTimeout: 100 }),
+      server
+    );
+
+    await expect(connection.queryAll('RETURN "s1" AS slow')).rejects.toThrow(TransportError);
+
+    // A desynced connection must not look healthy: the pool's only liveness
+    // predicate is Connection.isClosed (pool.ts:232,:326,:494,:543).
+    expect(connection.isClosed).toBe(true);
+  });
+
+  it('rejects a query issued on a connection left broken by a timeout', async () => {
+    const server = new ScriptedGeodeServer([
+      { column: 'slow', pages: [['s1']], schemaDelayMs: 400 },
+      { column: 'next', pages: [['n1']] },
+    ]);
+    connection = await Connection.connectWithTransport(
+      scriptedConfig({ requestTimeout: 100 }),
+      server
+    );
+
+    await expect(connection.queryAll('RETURN "s1" AS slow')).rejects.toThrow(TransportError);
+    await sleep(600);
+
+    // Fail loud: returning the stalled query's rows here is the ENG-3918 leak.
+    await expect(connection.queryAll('RETURN "n1" AS next')).rejects.toThrow();
   });
 });
