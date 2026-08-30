@@ -101,6 +101,9 @@ message ExecuteRequest {
   string session_id = 1;
   string query = 2;
   repeated Param params = 3;
+  bytes principal_envelope_bytes = 4; // GPS wire principal (federation-trusted only)
+  string idempotency_key = 5;         // RC-3 write dedup
+  bool read_only = 6;                 // reject mutating statements when set
 }
 
 message Param {
