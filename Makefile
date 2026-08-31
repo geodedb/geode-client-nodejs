@@ -21,7 +21,8 @@ CANONICAL_PROTO ?= ../geode/src/proto/geode.proto
 
 .PHONY: all build clean test test-unit test-property test-integration test-integration-docker \
         bench lint fmt fmt-check typecheck doc coverage ci ci-quick ci-full help \
-        docker-start docker-stop docker-logs install dev watch sync-proto
+        docker-start docker-stop docker-logs install dev watch sync-proto \
+        pack-verify publish-dry publish
 
 # Default target - run everything (except integration tests)
 all: install build fmt-check lint typecheck test-unit test-property bench-quick
@@ -58,6 +59,7 @@ help:
 	@echo "  make test-integration-docker - Run integration tests with Docker"
 	@echo "  make test-integration-grpc  - Run gRPC integration tests"
 	@echo "  make test-all      - Run ALL tests including integration"
+	@echo "  make pack-verify   - Verify npm pack tarball contains dist/"
 	@echo ""
 	@echo "Quality targets:"
 	@echo "  make lint          - Run ESLint"
@@ -344,6 +346,12 @@ audit:
 	@echo "Checking for security vulnerabilities..."
 	$(NPM) audit
 	@echo "✓ Security audit complete"
+
+# Verify `npm pack` from a clean checkout ships dist/ (packaging regression gate)
+pack-verify:
+	@echo "Verifying packed tarball contains dist/..."
+	npx vitest run tests/unit/pack-verify.test.ts
+	@echo "✓ Pack verification complete"
 
 # Publish package (dry run)
 publish-dry:

@@ -31,7 +31,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build",
+    "prepack": "npm run build",
     "bench": "vitest bench",
     "proto": "bash scripts/generate-proto.sh",
     "proto:check": "bash scripts/check-proto.sh",

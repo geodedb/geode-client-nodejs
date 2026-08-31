@@ -115,14 +115,48 @@ include:
 sbom-generate:
   allow_failure: true
 
+# Packaging regression gate: `npm pack` from a simulated clean checkout must
+# emit a tarball containing dist/. Guards the v1.3.1 dist-less tarball defect
+# (prepublishOnly does not run for `npm pack`; prepack does).
+pack-verify:
+  stage: test
+  image: node:20
+  needs:
+    - job: node-install-20
+      optional: true
+  variables:
+    npm_config_cache: '$CI_PROJECT_DIR/.npm'
+  script:
+    - npm ci
+    - npx vitest run tests/unit/pack-verify.test.ts
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+    policy: pull
+
 # Override publish rules to only trigger on version tags (including pre-releases)
+# NOTE: `needs:` replaces the component default (node-build) wholesale, so the
+# original dependency is restated alongside the pack-verify gate.
 node-publish-npm:
+  needs:
+    - job: node-build
+      optional: true
+    - job: pack-verify
+      optional: false
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/
       when: on_success
     - when: never
 
 node-publish-gitlab:
+  needs:
+    - job: node-build
+      optional: true
+    - job: pack-verify
+      optional: false
   rules:
     - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/
       when: on_success
