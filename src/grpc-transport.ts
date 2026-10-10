@@ -428,6 +428,8 @@ export class GrpcTransport implements Transport {
         return;
       }
 
+      // Invoked below via clientMethod.call(this._client, ...), so `this` stays bound.
+      // eslint-disable-next-line @typescript-eslint/unbound-method
       const clientMethod = this._client[method as keyof GeodeServiceClient] as (
         request: unknown,
         callback: (error: grpc.ServiceError | null, response: unknown) => void

@@ -184,12 +184,7 @@ export class StateError extends Error implements GeodeError {
  * Connection state enumeration.
  */
 export type ConnectionState =
-  | 'idle'
-  | 'executing'
-  | 'in_transaction'
-  | 'fetching'
-  | 'closed'
-  | 'error';
+  'idle' | 'executing' | 'in_transaction' | 'fetching' | 'closed' | 'error';
 
 // Sentinel error messages (stable strings for identity checks)
 export const ERR_INVALID_IDENT_MESSAGE = 'geode: identifier contains forbidden characters';

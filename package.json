@@ -64,28 +64,29 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.12.0",
-    "@grpc/grpc-js": "^1.12.0",
-    "@grpc/proto-loader": "^0.8.0",
+    "@bufbuild/protobuf": "^2.16.0",
+    "@grpc/grpc-js": "^1.14.6",
+    "@grpc/proto-loader": "^0.8.1",
     "@matrixai/quic": "^2.0.9",
     "decimal.js-light": "^2.5.1",
-    "protobufjs": "^8.0.0"
+    "protobufjs": "^8.8.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^26.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.54.0",
-    "@typescript-eslint/parser": "^8.54.0",
-    "@vitest/coverage-v8": "^4.0.18",
-    "eslint": "^10.0.0",
-    "eslint-config-prettier": "^10.0.0",
-    "fast-check": "^4.5.3",
-    "prettier": "^3.2.0",
-    "testcontainers": "^12.0.0",
-    "ts-proto": "^2.11.8",
-    "tsup": "^8.0.0",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.54.0",
-    "vitest": "^4.0.18"
+    "@types/node": "^26.6.5",
+    "@typescript-eslint/eslint-plugin": "^8.71.1",
+    "@typescript-eslint/parser": "^8.71.1",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "@vitest/coverage-v8": "^5.0.3",
+    "eslint": "^10.12.0",
+    "eslint-config-prettier": "^10.1.8",
+    "fast-check": "^4.10.2",
+    "prettier": "^3.9.10",
+    "testcontainers": "^12.2.0",
+    "ts-proto": "^2.13.0",
+    "tsup": "^8.5.1",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.71.1",
+    "vitest": "^5.0.3"
   }
 }

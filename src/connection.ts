@@ -112,9 +112,7 @@ function dataPageToRows(page: DataPage, columns: ColumnDefinition[]): Record<str
  * returning (ENG-3916).
  */
 type InlineRead =
-  | { status: 'received'; response: ExecutionResponse }
-  | { status: 'empty' }
-  | { status: 'pending' };
+  { status: 'received'; response: ExecutionResponse } | { status: 'empty' } | { status: 'pending' };
 
 /**
  * How the server delivers the pages that follow the first one.

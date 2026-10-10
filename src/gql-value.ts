@@ -170,7 +170,7 @@ export class GQLValue {
 
   static range<T>(value: GQLRange<T>): GQLValue {
     const v = new GQLValue('RANGE');
-    v._rangeValue = value as GQLRange;
+    v._rangeValue = value;
     return v;
   }
 

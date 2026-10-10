@@ -227,8 +227,7 @@ export async function explain(
     // The generated bindings decode `est_rows` to camelCase `estRows`; tolerate
     // the legacy snake_case key as a fallback for callers passing raw payloads.
     const totals = payload.totals as
-      | { cost?: unknown; estRows?: unknown; est_rows?: unknown }
-      | undefined;
+      { cost?: unknown; estRows?: unknown; est_rows?: unknown } | undefined;
 
     return {
       root,
