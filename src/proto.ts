@@ -248,7 +248,7 @@ export function protoValueToJS(val: ProtoValue): unknown {
   if (val.boolVal !== undefined) return val.boolVal;
 
   if (val.intVal !== undefined) {
-    return protoIntToJS(val.intVal.value as bigint | number | string);
+    return protoIntToJS(val.intVal.value);
   }
 
   if (val.doubleVal !== undefined) return val.doubleVal.value;
@@ -291,7 +291,7 @@ export function protoValueToJS(val: ProtoValue): unknown {
       props[entry.key] = protoValueToJS(entry.value ?? {});
     }
     return {
-      id: protoIdToBigInt(node.id as bigint | number | string),
+      id: protoIdToBigInt(node.id),
       labels: node.labels,
       properties: props,
     };
@@ -309,9 +309,9 @@ export function protoValueToJS(val: ProtoValue): unknown {
       props[entry.key] = protoValueToJS(entry.value ?? {});
     }
     return {
-      id: protoIdToBigInt(edge.id as bigint | number | string),
-      startNode: protoIdToBigInt(edge.fromId as bigint | number | string),
-      endNode: protoIdToBigInt(edge.toId as bigint | number | string),
+      id: protoIdToBigInt(edge.id),
+      startNode: protoIdToBigInt(edge.fromId),
+      endNode: protoIdToBigInt(edge.toId),
       type: edge.label,
       properties: props,
     };
@@ -329,7 +329,7 @@ export function protoValueToJS(val: ProtoValue): unknown {
     const ext = val.extVal;
     if (ext.text !== undefined) return ext.text;
     if (ext.bytes !== undefined) return Buffer.from(ext.bytes);
-    if (ext.intVal !== undefined) return protoIntToJS(ext.intVal as bigint | number | string);
+    if (ext.intVal !== undefined) return protoIntToJS(ext.intVal);
     if (ext.doubleVal !== undefined) return ext.doubleVal;
     if (ext.boolVal !== undefined) return ext.boolVal;
     return null;

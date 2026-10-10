@@ -54,8 +54,7 @@ export interface EdgePattern {
  * Pattern element (node or edge).
  */
 export type PatternElement =
-  | { kind: 'node'; pattern: NodePattern }
-  | { kind: 'edge'; pattern: EdgePattern };
+  { kind: 'node'; pattern: NodePattern } | { kind: 'edge'; pattern: EdgePattern };
 
 /**
  * Build a node pattern.

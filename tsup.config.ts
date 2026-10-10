@@ -3,7 +3,8 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm'],
-  dts: true,
+  // tsup's DTS rollup injects `baseUrl`, which TypeScript 6 deprecates (TS5101).
+  dts: { compilerOptions: { ignoreDeprecations: '6.0' } },
   sourcemap: true,
   clean: true,
   splitting: false,
