@@ -26,40 +26,40 @@ stages:
 
 include:
   # Node.js components - pinned versions
-  - component: gitlab.com/devnw/ci-catalog/node-install@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/node-install@v1.56.1
     inputs:
       stage: install
       node_version: '24'
 
-  - component: gitlab.com/devnw/ci-catalog/node-lint@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/node-lint@v1.56.1
     inputs:
       stage: lint
       node_version: '24'
       lint_script: 'lint'
       allow_failure: false
 
-  - component: gitlab.com/devnw/ci-catalog/node-format@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/node-format@v1.56.1
     inputs:
       stage: lint
       node_version: '24'
       format_script: 'format:check'
       allow_failure: false
 
-  - component: gitlab.com/devnw/ci-catalog/node-typecheck@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/node-typecheck@v1.56.1
     inputs:
       stage: lint
       node_version: '24'
       typecheck_script: 'typecheck'
       allow_failure: false
 
-  - component: gitlab.com/devnw/ci-catalog/node-build@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/node-build@v1.56.1
     inputs:
       stage: build
       node_version: '24'
       build_script: 'build'
       output_dir: 'dist'
 
-  - component: gitlab.com/devnw/ci-catalog/node-test@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/node-test@v1.56.1
     inputs:
       stage: test
       node_version: '24'
@@ -68,30 +68,30 @@ include:
       coverage_path: 'coverage/cobertura-coverage.xml'
 
   # Security scanning - pinned versions
-  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.56.1
     inputs:
       stage: security
 
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.56.1
     inputs:
       stage: security
 
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.56.1
     inputs:
       stage: security
 
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.56.1
 
   # SBOM generation and scanning - pinned versions
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.56.1
 
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.56.1
     inputs:
       allow_failure: false
 
   # Publishing with OIDC trusted publishing (only on tags)
   # Requires trusted publisher configured on npmjs.com
-  - component: gitlab.com/devnw/ci-catalog/node-publish@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/node-publish@v1.56.1
     inputs:
       stage: publish
       # node 24: the component upgrades to npm@12 for OIDC publishing, which
@@ -103,7 +103,7 @@ include:
       provenance: false  # Requires GitLab-hosted runners; self-hosted runners not supported
 
   # Release creation
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.56.1
     inputs:
       stage: release
 
