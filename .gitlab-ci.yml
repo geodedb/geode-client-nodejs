@@ -5,6 +5,12 @@
 # SECURITY: All component versions are pinned to prevent supply chain attacks.
 # Update versions explicitly after security review.
 
+workflow:
+  # SRE-172: a newer commit on the same ref cancels the superseded pipeline's
+  # interruptible (validation) jobs. Release/deploy jobs stay non-interruptible.
+  auto_cancel:
+    on_new_commit: interruptible
+
 default:
   tags:
     - company
@@ -119,6 +125,7 @@ sbom-generate:
 # emit a tarball containing dist/. Guards the v1.3.1 dist-less tarball defect
 # (prepublishOnly does not run for `npm pack`; prepack does).
 pack-verify:
+  interruptible: true
   stage: test
   image: node:26
   needs:
