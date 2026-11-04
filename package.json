@@ -50,11 +50,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://gitlab.com/devnw/geode/geode-client-nodejs.git"
+    "url": "git+https://gitlab.com/devnw/codepros/geode/geode-client-nodejs.git"
   },
-  "homepage": "https://gitlab.com/devnw/geode",
+  "homepage": "https://gitlab.com/devnw/codepros/geode",
   "bugs": {
-    "url": "https://gitlab.com/devnw/geode/geode-client-nodejs/-/issues"
+    "url": "https://gitlab.com/devnw/codepros/geode/geode-client-nodejs/-/issues"
   },
   "engines": {
     "node": ">=20.0.0"
