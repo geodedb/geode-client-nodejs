@@ -1,6 +1,6 @@
 # Geode Node.js Client
 
-A high-performance Node.js client library for the [Geode](https://gitlab.com/devnw/geode) graph database, implementing the ISO/IEC 39075:2024 GQL standard over QUIC or gRPC with TLS 1.3.
+A high-performance Node.js client library for the [Geode](https://gitlab.com/devnw/codepros/geode) graph database, implementing the ISO/IEC 39075:2024 GQL standard over QUIC or gRPC with TLS 1.3.
 
 ## Features
 
@@ -611,7 +611,7 @@ See [CLAUDE.md](./CLAUDE.md) for development guidelines.
 ### Development Setup
 
 ```bash
-git clone https://gitlab.com/devnw/geode/geode-client-nodejs.git
+git clone https://gitlab.com/devnw/codepros/geode/geode-client-nodejs.git
 cd geode-client-nodejs
 npm install
 npm test
@@ -624,7 +624,7 @@ Apache License 2.0
 
 ## Related Projects
 
-- [Geode Server](https://gitlab.com/devnw/geode/geode) - The Geode database server
-- [Go Client](https://gitlab.com/devnw/geode/geode-client-go) - Go client library
-- [Python Client](https://gitlab.com/devnw/geode/geode-client-python) - Python client library
-- [Rust Client](https://gitlab.com/devnw/geode/geode-client-rust) - Rust client library
+- [Geode Server](https://gitlab.com/devnw/codepros/geode/geode) - The Geode database server
+- [Go Client](https://gitlab.com/devnw/codepros/geode/geode-client-go) - Go client library
+- [Python Client](https://gitlab.com/devnw/codepros/geode/geode-client-python) - Python client library
+- [Rust Client](https://gitlab.com/devnw/codepros/geode/geode-client-rust) - Rust client library
